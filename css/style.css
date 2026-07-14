@@ -105,8 +105,16 @@ a { color: inherit; }
 .rate-strip:hover { color: var(--accent); }
 .rate-strip .rs-item b { font-weight: 700; color: var(--ink-3); margin-right: 3px; font-size: 10px; }
 
+/* On narrow screens the strip becomes its own slim data bar under the tabs */
 @media (max-width: 700px) {
-  .rate-strip { display: none; } /* strip needs room; Rates tab covers mobile */
+  .tab-row { flex-direction: column; align-items: stretch; gap: 0; }
+  .rate-strip {
+    justify-content: space-between;
+    gap: 0;
+    border-top: 1px solid var(--rule);
+    padding: 8px 0;
+    font-size: 11.5px;
+  }
 }
 
 #toast {
