@@ -102,6 +102,7 @@ a { color: inherit; }
   padding-bottom: 4px;
 }
 
+.rate-strip.off { display: none; }
 .rate-strip:hover { color: var(--accent); }
 .rate-strip .rs-item b { font-weight: 700; color: var(--ink-3); margin-right: 3px; font-size: 10px; }
 .rs-val.up { color: #1e8e3e; font-weight: 700; }

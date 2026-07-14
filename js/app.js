@@ -206,6 +206,8 @@ function showView(name) {
     a.classList.toggle("active", a.dataset.tab === name);
   }
   $("date-nav").classList.toggle("off", name !== "briefing");
+  // the masthead ticker is redundant on the Rates page itself
+  $("rate-strip").classList.toggle("off", name === "rates");
   window.scrollTo(0, 0);
 }
 
@@ -998,7 +1000,7 @@ function buildCurveSvg(t) {
   // and proportionally larger type instead of a shrunken desktop chart.
   const mobile = matchMedia("(max-width: 700px)").matches;
   const k = mobile ? 1.9 : 1; // text/mark scale factor
-  const W = 680, H = mobile ? 560 : 320;
+  const W = 680, H = mobile ? 630 : 320;
   const padL = 46 * (mobile ? 1.5 : 1), padR = 20, padT = 20 * k, padB = 32 * k;
   const fs = { axis: 10 * k, value: 11 * k };
   const xs = (m) => padL + (Math.sqrt(m) - 1) / (Math.sqrt(360) - 1) * (W - padL - padR);
@@ -1072,7 +1074,7 @@ function buildForwardSvg(fwd) {
 
   const mobile = matchMedia("(max-width: 700px)").matches;
   const k = mobile ? 1.9 : 1;
-  const W = 680, H = mobile ? 560 : 320;
+  const W = 680, H = mobile ? 630 : 320;
   const padL = 46 * (mobile ? 1.5 : 1), padR = 26, padT = 24 * k, padB = 32 * k;
   const fs = { axis: 10 * k, value: 11 * k };
   const tMax = Math.max(...pts.map((p) => p.m));
@@ -1142,7 +1144,7 @@ function buildHistorySvg(r, key, range) {
 
   const mobile = matchMedia("(max-width: 700px)").matches;
   const k = mobile ? 1.9 : 1;
-  const W = 680, H = mobile ? 560 : 320;
+  const W = 680, H = mobile ? 630 : 320;
   const padL = 46 * (mobile ? 1.5 : 1), padR = 54 * k * 0.6, padT = 20 * k, padB = 32 * k;
   const fs = { axis: 10 * k, value: 11 * k };
 
