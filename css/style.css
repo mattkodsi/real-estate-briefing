@@ -104,6 +104,13 @@ a { color: inherit; }
 
 .rate-strip:hover { color: var(--accent); }
 .rate-strip .rs-item b { font-weight: 700; color: var(--ink-3); margin-right: 3px; font-size: 10px; }
+.rs-val.up { color: #1e8e3e; font-weight: 700; }
+.rs-val.down { color: #d23f31; font-weight: 700; }
+
+@media (prefers-color-scheme: dark) {
+  .rs-val.up { color: #5bd07f; }
+  .rs-val.down { color: #ff7b6e; }
+}
 
 /* On narrow screens the strip becomes its own slim data bar under the tabs */
 @media (max-width: 700px) {

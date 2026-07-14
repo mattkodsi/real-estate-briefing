@@ -835,16 +835,18 @@ function renderRateStrip() {
   if (!r?.treasury) { strip.hidden = true; return; }
   strip.hidden = false;
   strip.innerHTML = "";
+  const tp = r.treasuryPrior || {};
   const items = [
-    ["5Y", r.treasury["5Y"]],
-    ["10Y", r.treasury["10Y"]],
-    ["30Y", r.treasury["30Y"]],
-    ["SOFR", r.sofr?.rate],
+    ["5Y", r.treasury["5Y"], tp["5Y"]],
+    ["10Y", r.treasury["10Y"], tp["10Y"]],
+    ["30Y", r.treasury["30Y"], tp["30Y"]],
+    ["SOFR", r.sofr?.rate, r.sofr?.prior],
   ];
-  for (const [label, val] of items) {
+  for (const [label, val, prior] of items) {
     const span = document.createElement("span");
     span.className = "rs-item";
-    span.innerHTML = `<b>${label}</b> ${val == null ? "—" : val.toFixed(2)}`;
+    const dir = val != null && prior != null ? (val > prior ? " up" : val < prior ? " down" : "") : "";
+    span.innerHTML = `<b>${label}</b> <span class="rs-val${dir}">${val == null ? "—" : val.toFixed(2)}</span>`;
     strip.appendChild(span);
   }
 }
