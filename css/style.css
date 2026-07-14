@@ -513,6 +513,7 @@ main {
 .curve-wrap svg { width: 100%; height: auto; display: block; }
 
 .cv-grid { stroke: var(--rule); stroke-width: 1; }
+.cv-grid.minor { opacity: 0.45; }
 .cv-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
 .cv-dot { fill: var(--box); stroke: var(--accent); stroke-width: 2; }
 .cv-dot.key { fill: var(--accent); }
@@ -521,6 +522,21 @@ main {
 .cv-vlabel { font-size: 11px; font-weight: 700; fill: var(--ink); font-family: var(--sans); }
 
 .rates-note { margin-top: 18px; font-size: 11.5px; color: var(--ink-3); }
+
+/* Rates page compresses to a single phone screen: one row of tiles per band,
+   tighter heads, no subs */
+@media (max-width: 700px) {
+  #view-rates .section-head { margin: 14px 0 6px; }
+  #view-rates .section-head:first-child { margin-top: 4px; }
+  .rate-tiles.quads { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .rate-tiles.thirds { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .rate-tile { padding: 8px 9px; }
+  .rt-label { font-size: 8px; letter-spacing: 0.8px; }
+  .rt-value { font-size: 16px; margin-top: 2px; }
+  .rt-sub { display: none; }
+  .curve-wrap { padding: 8px 6px 2px; }
+  .rates-note { margin-top: 10px; font-size: 10px; }
+}
 
 /* ---------- Weekly ---------- */
 .week-label {

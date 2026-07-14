@@ -81,6 +81,12 @@ async function init() {
   });
   setInterval(() => { if (!document.hidden) refreshData(true); }, 10 * 60 * 1000);
   loadRates();
+  // the curve's geometry is viewport-dependent; rebuild when crossing the breakpoint
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (!$("view-rates").hidden) renderRates(); }, 200);
+  });
   $("reader-back").addEventListener("click", () => closeReaderNav());
   $("map-mode-day").addEventListener("click", () => setMapMode("day"));
   $("map-mode-all").addEventListener("click", () => setMapMode("all"));
@@ -874,7 +880,7 @@ function renderRates() {
   // headline tiles
   wrap.appendChild(sectionHead("Key Rates"));
   const tiles = document.createElement("div");
-  tiles.className = "rate-tiles";
+  tiles.className = "rate-tiles quads";
   tiles.appendChild(rateTile("SOFR", r.sofr?.rate, "overnight, " + (r.sofr?.date || "")));
   tiles.appendChild(rateTile("5-Year", r.treasury["5Y"], "treasury"));
   tiles.appendChild(rateTile("10-Year", r.treasury["10Y"], "treasury"));
@@ -892,7 +898,7 @@ function renderRates() {
   const a = r.sofrAverages || {};
   wrap.appendChild(sectionHead("SOFR Compounded Averages"));
   const avgTiles = document.createElement("div");
-  avgTiles.className = "rate-tiles";
+  avgTiles.className = "rate-tiles thirds";
   avgTiles.appendChild(rateTile("30-Day", a["30d"]));
   avgTiles.appendChild(rateTile("90-Day", a["90d"]));
   avgTiles.appendChild(rateTile("180-Day", a["180d"]));
@@ -910,7 +916,13 @@ function buildCurveSvg(t) {
     .map(([k, m]) => ({ label: k, months: m, rate: t[k] }));
   if (!pts.length) return document.createTextNode("");
 
-  const W = 680, H = 300, padL = 44, padR = 20, padT = 18, padB = 30;
+  // The SVG scales to its container, so phones get their own taller geometry
+  // and proportionally larger type instead of a shrunken desktop chart.
+  const mobile = matchMedia("(max-width: 700px)").matches;
+  const k = mobile ? 1.9 : 1; // text/mark scale factor
+  const W = 680, H = mobile ? 560 : 320;
+  const padL = 46 * (mobile ? 1.5 : 1), padR = 20, padT = 20 * k, padB = 32 * k;
+  const fs = { axis: 10 * k, value: 11 * k };
   const xs = (m) => padL + (Math.sqrt(m) - 1) / (Math.sqrt(360) - 1) * (W - padL - padR);
   const rates = pts.map((p) => p.rate);
   const yMin = Math.floor(Math.min(...rates) * 4) / 4 - 0.25;
@@ -929,32 +941,34 @@ function buildCurveSvg(t) {
     return el;
   };
 
-  // recessive horizontal grid at 0.5% steps
-  for (let g = Math.ceil(yMin * 2) / 2; g <= yMax; g += 0.5) {
-    put("line", { x1: padL, x2: W - padR, y1: ys(g), y2: ys(g), class: "cv-grid" });
-    put("text", { x: padL - 8, y: ys(g) + 3.5, class: "cv-ylabel", "text-anchor": "end" }, g.toFixed(1));
+  // recessive horizontal grid at 0.25% steps for a granular y-axis
+  for (let g = Math.ceil(yMin * 4) / 4; g <= yMax + 0.001; g += 0.25) {
+    const major = Math.round(g * 100) % 50 === 0;
+    put("line", { x1: padL, x2: W - padR, y1: ys(g), y2: ys(g), class: major ? "cv-grid" : "cv-grid minor" });
+    put("text", { x: padL - 8, y: ys(g) + fs.axis * 0.34, class: "cv-ylabel", "text-anchor": "end", "font-size": fs.axis }, g.toFixed(2));
   }
 
   // x labels (selective)
   for (const p of pts) {
     if (!["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y"].includes(p.label)) continue;
-    put("text", { x: xs(p.months), y: H - 8, class: "cv-xlabel", "text-anchor": "middle" }, p.label);
+    if (mobile && ["3M", "3Y", "7Y"].includes(p.label)) continue; // avoid crowding at phone scale
+    put("text", { x: xs(p.months), y: H - 10, class: "cv-xlabel", "text-anchor": "middle", "font-size": fs.axis }, p.label);
   }
 
   // the curve
   const d = pts.map((p, i) => `${i ? "L" : "M"}${xs(p.months).toFixed(1)},${ys(p.rate).toFixed(1)}`).join(" ");
-  put("path", { d, class: "cv-line" });
+  put("path", { d, class: "cv-line", "stroke-width": 2 * k });
 
   // dots — key tenors emphasized and direct-labeled
   const KEY = new Set(["5Y", "10Y", "30Y"]);
   for (const p of pts) {
     const key = KEY.has(p.label);
-    put("circle", { cx: xs(p.months), cy: ys(p.rate), r: key ? 5 : 3, class: key ? "cv-dot key" : "cv-dot" });
+    put("circle", { cx: xs(p.months), cy: ys(p.rate), r: (key ? 5 : 3) * k, class: key ? "cv-dot key" : "cv-dot", "stroke-width": 2 * k });
     if (key) {
-      put("text", { x: xs(p.months), y: ys(p.rate) - 11, class: "cv-vlabel", "text-anchor": "middle" }, p.rate.toFixed(2));
+      put("text", { x: xs(p.months), y: ys(p.rate) - 11 * k, class: "cv-vlabel", "text-anchor": "middle", "font-size": fs.value }, p.rate.toFixed(2));
     }
     // generous invisible hit target with a native tooltip
-    const hit = put("circle", { cx: xs(p.months), cy: ys(p.rate), r: 13, class: "cv-hit" });
+    const hit = put("circle", { cx: xs(p.months), cy: ys(p.rate), r: 13 * k, class: "cv-hit" });
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${p.label}: ${p.rate.toFixed(2)}%`;
     hit.appendChild(title);
