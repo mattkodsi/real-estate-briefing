@@ -296,7 +296,10 @@ function renderFeed(day) {
 
   if (featured.length) {
     feed.appendChild(sectionHead("Top Stories"));
-    featured.forEach((s, i) => feed.appendChild(storyRow(s, day.date, i === 0)));
+    const group = document.createElement("div");
+    group.className = "story-group featured";
+    featured.forEach((s, i) => group.appendChild(storyRow(s, day.date, i === 0)));
+    feed.appendChild(group);
   }
 
   const groups = new Map();
@@ -308,7 +311,10 @@ function renderFeed(day) {
   const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   for (const [name, list] of ordered) {
     feed.appendChild(sectionHead(name));
-    list.forEach((s) => feed.appendChild(storyRow(s, day.date, false)));
+    const group = document.createElement("div");
+    group.className = "story-group";
+    list.forEach((s) => group.appendChild(storyRow(s, day.date, false)));
+    feed.appendChild(group);
   }
 }
 
@@ -411,6 +417,8 @@ async function renderWeekly() {
 
   if ((wk.themes || []).length) {
     wrap.appendChild(sectionHead("Themes"));
+    const grid = document.createElement("div");
+    grid.className = "theme-grid";
     for (const t of wk.themes) {
       const box = document.createElement("div");
       box.className = "theme";
@@ -419,8 +427,9 @@ async function renderWeekly() {
       const p = document.createElement("p");
       p.textContent = t.body;
       box.append(h3, p);
-      wrap.appendChild(box);
+      grid.appendChild(box);
     }
+    wrap.appendChild(grid);
   }
 
   if ((wk.topStories || []).length) {

@@ -10,7 +10,8 @@
   --serif: "New York", ui-serif, Georgia, "Times New Roman", serif;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", sans-serif;
   --pad: clamp(16px, 4.5vw, 28px);
-  --measure: 680px;
+  --measure: 680px; /* reading width (reader overlay) */
+  --page: 680px;    /* app frame width; widens on desktop */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -46,7 +47,7 @@ a { color: inherit; }
 
 /* ---------- Masthead ---------- */
 .masthead {
-  max-width: var(--measure);
+  max-width: var(--page);
   margin: 0 auto;
   padding: 16px var(--pad) 0;
   border-bottom: 1px solid var(--rule);
@@ -152,9 +153,15 @@ a { color: inherit; }
 
 /* ---------- Layout ---------- */
 main {
-  max-width: var(--measure);
+  max-width: var(--page);
   margin: 0 auto;
   padding: 20px var(--pad) 60px;
+}
+
+.story-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
 }
 
 /* ---------- Lede ---------- */
@@ -205,7 +212,6 @@ main {
   border: 1px solid var(--rule);
   border-radius: 8px;
   padding: 13px 15px;
-  margin-bottom: 8px;
   -webkit-tap-highlight-color: transparent;
   transition: border-color 0.12s ease;
 }
@@ -326,12 +332,17 @@ main {
 
 #weekly-content .week-overview { font-size: 14.5px; line-height: 1.55; margin-bottom: 18px; }
 
+.theme-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
 .theme {
   background: var(--box);
   border: 1px solid var(--rule);
   border-radius: 8px;
   padding: 13px 15px;
-  margin-bottom: 8px;
 }
 
 .theme h3 { font-size: 13.5px; font-weight: 600; }
@@ -354,6 +365,12 @@ main {
 .week-notes { margin-top: 18px; font-size: 12px; font-style: italic; color: var(--ink-2); }
 
 /* ---------- History ---------- */
+#history-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
 .day-card {
   display: block;
   width: 100%;
@@ -362,7 +379,6 @@ main {
   border: 1px solid var(--rule);
   border-radius: 8px;
   padding: 13px 15px;
-  margin-bottom: 8px;
 }
 
 .day-card h3 { font-size: 13.5px; font-weight: 600; }
@@ -472,3 +488,34 @@ main {
 .reader-fallback { font-style: italic; color: var(--ink-2); }
 
 .reader-end { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--rule); }
+
+/* ---------- Desktop ---------- */
+@media (min-width: 960px) {
+  :root { --page: 1100px; }
+
+  /* lede and key points share the top band */
+  #lede-block {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 32px;
+    align-items: start;
+  }
+
+  #lede { font-size: 16px; }
+
+  #key-points { margin-top: 2px; }
+  #key-points li:first-child { padding-top: 0; }
+  #key-points li:first-child::before { top: 6px; }
+
+  /* two-across cards; the lead story spans the row */
+  .story-group { grid-template-columns: repeat(2, 1fr); }
+  .story-group.featured .story.lead { grid-column: 1 / -1; }
+  .story-group.featured .story.lead p { max-width: 72ch; }
+
+  #map-canvas { height: min(70vh, 660px); }
+
+  .theme-grid { grid-template-columns: repeat(2, 1fr); }
+  #history-list { grid-template-columns: repeat(2, 1fr); }
+
+  #weekly-content .week-overview { max-width: 72ch; }
+}
