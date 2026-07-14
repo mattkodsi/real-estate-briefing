@@ -52,7 +52,9 @@ const state = {
   groupBy: "section",
   mapTypeFilter: null, // null = all; otherwise a Set of dealTypes
   controlsDate: null,  // filters reset when the viewed day changes
-  rateChart: "curve",  // "curve" | "forward"
+  rateChart: "curve",  // "curve" | "forward" | "history"
+  histKey: null,       // which pane's trend is showing: "5Y" | "10Y" | "30Y" | "SOFR"
+  histRange: "3M",     // "1M" | "3M" | "6M" | "1Y"
 };
 
 const $ = (id) => document.getElementById(id);
@@ -847,9 +849,24 @@ function renderRateStrip() {
   }
 }
 
-function rateTile(label, value, sub, prior) {
+function rateTile(label, value, sub, prior, key) {
   const div = document.createElement("div");
   div.className = "rate-tile";
+  if (key) {
+    div.classList.add("clickable");
+    if (state.rateChart === "history" && state.histKey === key) div.classList.add("on");
+    div.title = "Tap for the trend; tap again for the yield curve";
+    div.addEventListener("click", () => {
+      if (state.rateChart === "history" && state.histKey === key) {
+        state.rateChart = "curve";
+        state.histKey = null;
+      } else {
+        state.rateChart = "history";
+        state.histKey = key;
+      }
+      renderRates();
+    });
+  }
   const l = document.createElement("div");
   l.className = "rt-label";
   l.textContent = label;
@@ -893,34 +910,58 @@ function renderRates() {
   const tiles = document.createElement("div");
   tiles.className = "rate-tiles quads";
   const tp = r.treasuryPrior || {};
-  tiles.appendChild(rateTile("5-Year", r.treasury["5Y"], "treasury", tp["5Y"]));
-  tiles.appendChild(rateTile("10-Year", r.treasury["10Y"], "treasury", tp["10Y"]));
-  tiles.appendChild(rateTile("30-Year", r.treasury["30Y"], "treasury", tp["30Y"]));
-  tiles.appendChild(rateTile("SOFR", r.sofr?.rate, "overnight", r.sofr?.prior));
+  tiles.appendChild(rateTile("5-Year", r.treasury["5Y"], "treasury", tp["5Y"], "5Y"));
+  tiles.appendChild(rateTile("10-Year", r.treasury["10Y"], "treasury", tp["10Y"], "10Y"));
+  tiles.appendChild(rateTile("30-Year", r.treasury["30Y"], "treasury", tp["30Y"], "30Y"));
+  tiles.appendChild(rateTile("SOFR", r.sofr?.rate, "overnight", r.sofr?.prior, "SOFR"));
   wrap.appendChild(tiles);
 
   // chart band with a curve/forward toggle (one chart at a time keeps the page
   // to a single phone screen)
   const head = document.createElement("div");
   head.className = "chart-head";
-  const title = sectionHead(state.rateChart === "forward" ? "Implied Forward Path" : "Treasury Yield Curve");
+  const histLabels = { "5Y": "5-Year Treasury", "10Y": "10-Year Treasury", "30Y": "30-Year Treasury", SOFR: "SOFR" };
+  const title = sectionHead(
+    state.rateChart === "forward" ? "Implied Forward Path"
+    : state.rateChart === "history" ? `${histLabels[state.histKey] || ""} Trend`
+    : "Treasury Yield Curve"
+  );
   title.style.margin = "0";
   head.appendChild(title);
+
   const toggle = document.createElement("div");
   toggle.className = "map-toggle";
-  for (const [mode, label] of [["curve", "Curve"], ["forward", "Forward"]]) {
-    const b = document.createElement("button");
-    b.textContent = label;
-    b.className = state.rateChart === mode ? "on" : "";
-    b.addEventListener("click", () => { state.rateChart = mode; renderRates(); });
-    toggle.appendChild(b);
+  if (state.rateChart === "history") {
+    for (const rng of ["1M", "3M", "6M", "1Y"]) {
+      const b = document.createElement("button");
+      b.textContent = rng;
+      b.className = state.histRange === rng ? "on" : "";
+      b.addEventListener("click", () => { state.histRange = rng; renderRates(); });
+      toggle.appendChild(b);
+    }
+    const x = document.createElement("button");
+    x.textContent = "✕";
+    x.addEventListener("click", () => { state.rateChart = "curve"; state.histKey = null; renderRates(); });
+    toggle.appendChild(x);
+  } else {
+    for (const [mode, label] of [["curve", "Curve"], ["forward", "Forward"]]) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.className = state.rateChart === mode ? "on" : "";
+      b.addEventListener("click", () => { state.rateChart = mode; renderRates(); });
+      toggle.appendChild(b);
+    }
   }
   head.appendChild(toggle);
   wrap.appendChild(head);
 
   const chart = document.createElement("div");
   chart.className = "curve-wrap";
-  chart.appendChild(state.rateChart === "forward" ? buildForwardSvg(r.forward || []) : buildCurveSvg(r.treasury));
+  chart.appendChild(
+    state.rateChart === "forward" ? buildForwardSvg(r.forward || [])
+    : state.rateChart === "history" ? buildHistorySvg(r, state.histKey, state.histRange)
+    : buildCurveSvg(r.treasury)
+  );
   wrap.appendChild(chart);
 
 
@@ -938,6 +979,8 @@ function renderRates() {
   note.className = "rates-note";
   note.textContent = state.rateChart === "forward"
     ? "Forward path is bootstrapped from today's Treasury curve — the free equivalent of the futures-based SOFR forward curve (licensed data). A directional modeling guide, not a quote."
+    : state.rateChart === "history"
+    ? "Daily official prints: Treasury par yields (treasury.gov) and SOFR (New York Fed). Tap the highlighted pane again to return to the yield curve."
     : `Treasury par yield curve as of ${r.curveDate}; SOFR published by the New York Fed (${r.sofr?.date}). Changes are vs the prior business day.`;
   wrap.appendChild(note);
 }
@@ -1066,6 +1109,83 @@ function buildForwardSvg(fwd) {
     const hit = put("circle", { cx: xs(p.t), cy: ys(p.rate), r: 13 * k, class: "cv-hit" });
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${p.t === 0 ? "Now" : "+" + p.t + "Y"}: ${p.rate.toFixed(2)}%`;
+    hit.appendChild(title);
+  }
+
+  return svg;
+}
+
+function buildHistorySvg(r, key, range) {
+  const hist = r.history || {};
+  const raw = key === "SOFR"
+    ? (hist.sofr || []).map((e) => ({ date: e.date, rate: e.rate }))
+    : (hist.treasury || []).map((e) => ({ date: e.date, rate: e[key] }));
+  const days = { "1M": 32, "3M": 93, "6M": 184, "1Y": 367 }[range] || 93;
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const pts = raw.filter((p) => typeof p.rate === "number" && p.date >= cutoff);
+
+  if (pts.length < 2) {
+    const p = document.createElement("p");
+    p.style.cssText = "font-style:italic;color:var(--ink-2);padding:26px 10px";
+    p.textContent = "Not enough history for this range yet.";
+    return p;
+  }
+
+  const mobile = matchMedia("(max-width: 700px)").matches;
+  const k = mobile ? 1.9 : 1;
+  const W = 680, H = mobile ? 560 : 320;
+  const padL = 46 * (mobile ? 1.5 : 1), padR = 54 * k * 0.6, padT = 20 * k, padB = 32 * k;
+  const fs = { axis: 10 * k, value: 11 * k };
+
+  const t0 = Date.parse(pts[0].date), t1 = Date.parse(pts[pts.length - 1].date);
+  const xs = (d) => padL + (Date.parse(d) - t0) / (t1 - t0 || 1) * (W - padL - padR);
+  const rates = pts.map((p) => p.rate);
+  const lo = Math.min(...rates), hi = Math.max(...rates);
+  const span = Math.max(hi - lo, 0.1);
+  const step = span <= 0.5 ? 0.1 : span <= 1.2 ? 0.25 : 0.5;
+  const yMin = Math.floor((lo - step / 2) / step) * step;
+  const yMax = Math.ceil((hi + step / 2) / step) * step;
+  const ys = (v) => padT + (yMax - v) / (yMax - yMin) * (H - padT - padB);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `${key} over the last ${range}: from ${pts[0].rate}% to ${pts[pts.length - 1].rate}%`);
+  const put = (tag, attrs, text) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [a, v] of Object.entries(attrs)) el.setAttribute(a, v);
+    if (text != null) el.textContent = text;
+    svg.appendChild(el);
+    return el;
+  };
+
+  for (let g = yMin; g <= yMax + 0.001; g += step) {
+    put("line", { x1: padL, x2: W - padR, y1: ys(g), y2: ys(g), class: "cv-grid" });
+    put("text", { x: padL - 8, y: ys(g) + fs.axis * 0.34, class: "cv-ylabel", "text-anchor": "end", "font-size": fs.axis }, g.toFixed(2));
+  }
+
+  // 4 date labels across the window
+  const fmt = (d) => new Date(Date.parse(d)).toLocaleDateString("en-US", range === "1Y" ? { month: "short" } : { month: "short", day: "numeric" });
+  for (let i = 0; i < 4; i++) {
+    const p = pts[Math.round(i * (pts.length - 1) / 3)];
+    put("text", { x: xs(p.date), y: H - 10, class: "cv-xlabel", "text-anchor": i === 0 ? "start" : i === 3 ? "end" : "middle", "font-size": fs.axis }, fmt(p.date));
+  }
+
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${xs(p.date).toFixed(1)},${ys(p.rate).toFixed(1)}`).join(" ");
+  put("path", { d, class: "cv-line", "stroke-width": 2 * k });
+
+  // endpoint dot + value
+  const last = pts[pts.length - 1];
+  put("circle", { cx: xs(last.date), cy: ys(last.rate), r: 4.5 * k, class: "cv-dot key", "stroke-width": 2 * k });
+  put("text", { x: xs(last.date) + 8 * k, y: ys(last.rate) + fs.value * 0.34, class: "cv-vlabel", "text-anchor": "start", "font-size": fs.value }, last.rate.toFixed(2));
+
+  // sparse hover targets (~24 across the window)
+  const strideN = Math.max(1, Math.floor(pts.length / 24));
+  for (let i = 0; i < pts.length; i += strideN) {
+    const p = pts[i];
+    const hit = put("circle", { cx: xs(p.date), cy: ys(p.rate), r: 12 * k, class: "cv-hit" });
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = `${p.date}: ${p.rate.toFixed(2)}%`;
     hit.appendChild(title);
   }
 

@@ -503,6 +503,10 @@ main {
 
 .rt-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
 
+.rate-tile.clickable { cursor: pointer; transition: border-color 0.12s ease; }
+.rate-tile.clickable:hover { border-color: var(--ink-3); }
+.rate-tile.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
 .rt-chg {
   font-size: 10.5px;
   font-weight: 700;
