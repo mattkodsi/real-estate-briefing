@@ -14,6 +14,31 @@ async function sb(query) {
   return res.json();
 }
 
+/* One visual language for story types: same emoji + color in feed chips,
+   map pins, and legends. */
+const DEAL_TYPES = {
+  Sale:        { emoji: "💰", color: "#2e7d32" },
+  Financing:   { emoji: "🏦", color: "#1565c0" },
+  Lease:       { emoji: "📝", color: "#6d4fa3" },
+  Development: { emoji: "🏗️", color: "#b26a00" },
+  Distress:    { emoji: "⚠️", color: "#c62828" },
+  Legal:       { emoji: "⚖️", color: "#8d6e63" },
+  Policy:      { emoji: "🏛️", color: "#455a64" },
+  Industry:    { emoji: "🏢", color: "#00838f" },
+  Markets:     { emoji: "📊", color: "#5d4037" },
+};
+
+function typeInfo(t) {
+  return DEAL_TYPES[t] || { emoji: "📰", color: "#8a94a0" };
+}
+
+function fmtValue(n) {
+  if (!n) return null;
+  if (n >= 1e9) return "$" + (n / 1e9).toFixed(n % 1e9 ? 1 : 0) + "B";
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(n % 1e6 >= 1e5 ? 1 : 0).replace(/\.0$/, "") + "M";
+  return "$" + Math.round(n / 1e3) + "K";
+}
+
 const state = {
   dates: [],
   weeks: [],
@@ -23,6 +48,10 @@ const state = {
   map: null,
   markers: null,
   mapMode: "day",
+  filters: { type: null, asset: null, market: null },
+  groupBy: "section",
+  mapTypeFilter: null, // null = all; otherwise a Set of dealTypes
+  controlsDate: null,  // filters reset when the viewed day changes
 };
 
 const $ = (id) => document.getElementById(id);
@@ -216,6 +245,11 @@ async function renderBriefing(date) {
     kp.appendChild(li);
   }
 
+  if (state.controlsDate !== date) {
+    state.filters = { type: null, asset: null, market: null };
+    state.controlsDate = date;
+  }
+  renderControls(day);
   renderFeed(day);
 
   $("day-notes").hidden = !day.notes;
@@ -253,6 +287,29 @@ function storyMeta(story) {
   return span;
 }
 
+function chip(text, cls) {
+  const span = document.createElement("span");
+  span.className = "chip" + (cls ? " " + cls : "");
+  span.textContent = text;
+  return span;
+}
+
+function storyChips(story) {
+  const wrap = document.createElement("div");
+  wrap.className = "chips";
+  if (story.dealType) {
+    const t = typeInfo(story.dealType);
+    const c = chip(`${t.emoji} ${story.dealType}`, "chip-type");
+    c.style.borderColor = t.color + "55";
+    wrap.appendChild(c);
+  }
+  if (story.assetClass) wrap.appendChild(chip(story.assetClass));
+  if (story.market) wrap.appendChild(chip(story.market));
+  const v = fmtValue(story.valueUsd);
+  if (v) wrap.appendChild(chip(v, "chip-value"));
+  return wrap.children.length ? wrap : null;
+}
+
 function storyRow(story, date, lead) {
   const btn = document.createElement("button");
   btn.className = "story" + (lead ? " lead" : "");
@@ -267,6 +324,8 @@ function storyRow(story, date, lead) {
     p.textContent = story.summary;
     btn.appendChild(p);
   }
+  const chips = storyChips(story);
+  if (chips) btn.appendChild(chips);
   btn.appendChild(storyMeta(story));
   return btn;
 }
@@ -278,12 +337,128 @@ function sectionHead(label) {
   return h2;
 }
 
+/* ---------- controls (filters + grouping) ---------- */
+
+function counts(stories, key) {
+  const m = new Map();
+  for (const s of stories) {
+    const v = s[key];
+    if (v) m.set(v, (m.get(v) || 0) + 1);
+  }
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function makeSelect(label, options, current, onChange) {
+  const sel = document.createElement("select");
+  sel.className = "ctl-select";
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = label;
+  sel.appendChild(first);
+  for (const [name, n] of options) {
+    const o = document.createElement("option");
+    o.value = name;
+    o.textContent = `${name} (${n})`;
+    sel.appendChild(o);
+  }
+  sel.value = current || "";
+  sel.addEventListener("change", () => onChange(sel.value || null));
+  return sel;
+}
+
+function renderControls(day) {
+  const bar = $("controls");
+  const stories = day.stories || [];
+  bar.hidden = stories.length < 6; // controls only earn their space on busy days
+  if (bar.hidden) return;
+  bar.innerHTML = "";
+
+  // deal-type chips
+  const typeRow = document.createElement("div");
+  typeRow.className = "type-chips";
+  for (const [name, n] of counts(stories, "dealType")) {
+    const t = typeInfo(name);
+    const b = document.createElement("button");
+    b.className = "chip chip-filter" + (state.filters.type === name ? " on" : "");
+    b.textContent = `${t.emoji} ${name} ${n}`;
+    if (state.filters.type === name) {
+      b.style.background = t.color;
+      b.style.borderColor = t.color;
+    }
+    b.addEventListener("click", () => {
+      state.filters.type = state.filters.type === name ? null : name;
+      renderControls(day);
+      renderFeed(day);
+    });
+    typeRow.appendChild(b);
+  }
+  bar.appendChild(typeRow);
+
+  // asset / market / group-by selects
+  const row2 = document.createElement("div");
+  row2.className = "ctl-row";
+  row2.appendChild(makeSelect("All assets", counts(stories, "assetClass"), state.filters.asset, (v) => {
+    state.filters.asset = v; renderControls(day); renderFeed(day);
+  }));
+  row2.appendChild(makeSelect("All markets", counts(stories, "market"), state.filters.market, (v) => {
+    state.filters.market = v; renderControls(day); renderFeed(day);
+  }));
+
+  const groupSel = document.createElement("select");
+  groupSel.className = "ctl-select";
+  for (const [val, label] of [["section", "Group: Topic"], ["dealType", "Group: Type"], ["assetClass", "Group: Asset"], ["market", "Group: Market"]]) {
+    const o = document.createElement("option");
+    o.value = val;
+    o.textContent = label;
+    groupSel.appendChild(o);
+  }
+  groupSel.value = state.groupBy;
+  groupSel.addEventListener("change", () => { state.groupBy = groupSel.value; renderFeed(day); });
+  row2.appendChild(groupSel);
+
+  const active = state.filters.type || state.filters.asset || state.filters.market;
+  if (active) {
+    const clear = document.createElement("button");
+    clear.className = "ctl-clear";
+    clear.textContent = "✕ Clear";
+    clear.addEventListener("click", () => {
+      state.filters = { type: null, asset: null, market: null };
+      renderControls(day);
+      renderFeed(day);
+    });
+    row2.appendChild(clear);
+  }
+
+  const tally = document.createElement("span");
+  tally.className = "ctl-tally";
+  tally.textContent = `${applyFilters(stories).length} of ${stories.length}`;
+  row2.appendChild(tally);
+
+  bar.appendChild(row2);
+}
+
+function applyFilters(stories) {
+  const f = state.filters;
+  return stories.filter((s) =>
+    (!f.type || s.dealType === f.type) &&
+    (!f.asset || s.assetClass === f.asset) &&
+    (!f.market || s.market === f.market)
+  );
+}
+
+/* ---------- feed ---------- */
+
+function groupLabel(key) {
+  if (state.groupBy === "dealType") return `${typeInfo(key).emoji}  ${key}`;
+  return key;
+}
+
 function renderFeed(day) {
   const feed = $("feed");
   feed.innerHTML = "";
-  const stories = day.stories || [];
+  const all = day.stories || [];
 
-  if (!stories.length) {
+  if (!all.length) {
     const p = document.createElement("p");
     p.style.cssText = "font-style:italic;color:var(--ink-2);padding:30px 0;text-align:center";
     p.textContent = "No newsletters arrived this day.";
@@ -291,26 +466,43 @@ function renderFeed(day) {
     return;
   }
 
-  const featured = stories.filter((s) => s.featured);
-  const rest = stories.filter((s) => !s.featured);
+  const filtered = applyFilters(all);
+  const filtering = filtered.length !== all.length;
 
-  if (featured.length) {
-    feed.appendChild(sectionHead("Top Stories"));
-    const group = document.createElement("div");
-    group.className = "story-group featured";
-    featured.forEach((s, i) => group.appendChild(storyRow(s, day.date, i === 0)));
-    feed.appendChild(group);
+  if (!filtered.length) {
+    const p = document.createElement("p");
+    p.style.cssText = "font-style:italic;color:var(--ink-2);padding:30px 0;text-align:center";
+    p.textContent = "No stories match these filters.";
+    feed.appendChild(p);
+    return;
   }
 
+  // Top Stories band only in the unfiltered view
+  let rest = filtered;
+  if (!filtering) {
+    const featured = filtered.filter((s) => s.featured);
+    rest = filtered.filter((s) => !s.featured);
+    if (featured.length) {
+      feed.appendChild(sectionHead("Top Stories"));
+      const group = document.createElement("div");
+      group.className = "story-group featured";
+      featured.forEach((s, i) => group.appendChild(storyRow(s, day.date, i === 0)));
+      feed.appendChild(group);
+    }
+  }
+
+  const key = state.groupBy;
   const groups = new Map();
   for (const s of rest) {
-    const key = s.section || "More";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(s);
+    const k = s[key] || (key === "section" ? "More" : "Other");
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
   }
   const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   for (const [name, list] of ordered) {
-    feed.appendChild(sectionHead(name));
+    // within non-topic groupings, biggest deals first
+    if (key !== "section") list.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
+    feed.appendChild(sectionHead(groupLabel(name)));
     const group = document.createElement("div");
     group.className = "story-group";
     list.forEach((s) => group.appendChild(storyRow(s, day.date, false)));
@@ -350,15 +542,26 @@ async function renderMap() {
 
   state.markers.clearLayers();
   const pts = [];
+  const typeTally = new Map();
 
   for (const date of dates) {
     const day = await getDay(date);
     for (const story of day?.stories || []) {
+      const t = typeInfo(story.dealType);
+      const hasLoc = (story.locations || []).some((l) => typeof l.lat === "number");
+      if (hasLoc && story.dealType) typeTally.set(story.dealType, (typeTally.get(story.dealType) || 0) + 1);
+      if (state.mapTypeFilter && !state.mapTypeFilter.has(story.dealType)) continue;
       for (const loc of story.locations || []) {
         if (typeof loc.lat !== "number" || typeof loc.lng !== "number") continue;
         pts.push([loc.lat, loc.lng]);
-        const marker = L.circleMarker([loc.lat, loc.lng], {
-          radius: 8, weight: 2, color: "#2158a8", fillColor: "#2158a8", fillOpacity: 0.35,
+        const marker = L.marker([loc.lat, loc.lng], {
+          icon: L.divIcon({
+            className: "emoji-pin-wrap",
+            html: `<div class="emoji-pin" style="border-color:${t.color}">${t.emoji}</div>`,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15],
+            popupAnchor: [0, -14],
+          }),
         });
         const div = document.createElement("div");
         div.className = "map-popup";
@@ -367,7 +570,12 @@ async function renderMap() {
         h4.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
         const meta = document.createElement("div");
         meta.className = "pop-meta";
-        meta.textContent = `${story.section || ""} · ${formatDate(date, { month: "short", day: "numeric" })}`;
+        meta.textContent = [
+          story.dealType ? `${t.emoji} ${story.dealType}` : null,
+          story.assetClass,
+          fmtValue(story.valueUsd),
+          formatDate(date, { month: "short", day: "numeric" }),
+        ].filter(Boolean).join(" · ");
         const locEl = document.createElement("div");
         locEl.className = "pop-loc";
         locEl.textContent = loc.label || "";
@@ -378,6 +586,8 @@ async function renderMap() {
     }
   }
 
+  renderMapLegend(typeTally);
+
   // let the container get its size before fitting
   requestAnimationFrame(() => {
     state.map.invalidateSize();
@@ -385,6 +595,31 @@ async function renderMap() {
     else if (pts.length === 1) state.map.setView(pts[0], 11);
     else state.map.setView([39.5, -95], 4); // continental US
   });
+}
+
+function renderMapLegend(typeTally) {
+  const legend = $("map-legend");
+  legend.innerHTML = "";
+  const entries = [...typeTally.entries()].sort((a, b) => b[1] - a[1]);
+  if (entries.length < 2) return;
+  for (const [name, n] of entries) {
+    const t = typeInfo(name);
+    const off = state.mapTypeFilter && !state.mapTypeFilter.has(name);
+    const b = document.createElement("button");
+    b.className = "chip chip-filter" + (off ? " dim" : "");
+    b.textContent = `${t.emoji} ${name} ${n}`;
+    if (!off) b.style.borderColor = t.color + "88";
+    b.addEventListener("click", () => {
+      // tap = solo this type; tap again = show all
+      if (state.mapTypeFilter && state.mapTypeFilter.size === 1 && state.mapTypeFilter.has(name)) {
+        state.mapTypeFilter = null;
+      } else {
+        state.mapTypeFilter = new Set([name]);
+      }
+      renderMap();
+    });
+    legend.appendChild(b);
+  }
 }
 
 /* ---------- weekly view ---------- */
