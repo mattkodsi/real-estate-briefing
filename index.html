@@ -16,21 +16,22 @@
   <header class="masthead">
     <div class="masthead-row">
       <a class="wordmark" href="#/">Real Estate&nbsp;Briefing</a>
-      <div class="masthead-controls">
-        <nav class="date-nav" id="date-nav" aria-label="Change day">
-          <button id="prev-day" class="nav-arrow" aria-label="Previous day">‹</button>
-          <span id="current-date"></span>
-          <button id="next-day" class="nav-arrow" aria-label="Next day">›</button>
-        </nav>
-        <button id="refresh-btn" class="refresh-btn" aria-label="Refresh briefing" title="Refresh">↻</button>
-      </div>
+      <nav class="date-nav" id="date-nav" aria-label="Change day">
+        <button id="prev-day" class="nav-arrow" aria-label="Previous day">‹</button>
+        <span id="current-date"></span>
+        <button id="next-day" class="nav-arrow" aria-label="Next day">›</button>
+      </nav>
     </div>
-    <nav class="tabs" aria-label="Views">
-      <a href="#/" data-tab="briefing">Briefing</a>
-      <a href="#/map" data-tab="map">Map</a>
-      <a href="#/weekly" data-tab="weekly">Weekly</a>
-      <a href="#/history" data-tab="history">History</a>
-    </nav>
+    <div class="tab-row">
+      <nav class="tabs" aria-label="Views">
+        <a href="#/" data-tab="briefing">Briefing</a>
+        <a href="#/map" data-tab="map">Map</a>
+        <a href="#/weekly" data-tab="weekly">Weekly</a>
+        <a href="#/history" data-tab="history">History</a>
+        <a href="#/rates" data-tab="rates">Rates</a>
+      </nav>
+      <a id="rate-strip" class="rate-strip" href="#/rates" hidden></a>
+    </div>
   </header>
 
   <main>
@@ -69,6 +70,11 @@
     <!-- History -->
     <section id="view-history" class="view" hidden>
       <div id="history-list"></div>
+    </section>
+
+    <!-- Rates -->
+    <section id="view-rates" class="view" hidden>
+      <div id="rates-content"></div>
     </section>
   </main>
 

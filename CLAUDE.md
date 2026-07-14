@@ -39,6 +39,7 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
 8. **Weekly rollup**: compute the week's Monday. Rewrite `data/weeks/<monday>.json` synthesizing ALL of that week's days so far (schema below) — synthesize across days, don't just concatenate. **In a fresh checkout (cloud runs) the earlier day files won't exist locally** — fetch them from Supabase instead: `GET <SUPABASE_URL>/rest/v1/days?date=gte.<monday>&date=lte.<today>&select=data` with the `apikey` header, using the URL and key found in `scripts/push_data.py`.
 9. Validate all written files with `python3 -m json.tool`.
 10. **Publish**: `python3 scripts/push_data.py` — upserts every local day and week file to Supabase. The hosted app updates within seconds (no deploy involved).
+11. **Rates**: `python3 scripts/fetch_rates.py` — pulls the daily Treasury par yield curve (treasury.gov) and SOFR + compounded averages (NY Fed), and publishes to the Supabase `rates` table. Feeds the app's Rates page and the masthead ticker. Run it every pipeline run; it's cheap and idempotent.
 
 ## Data schema — `data/YYYY-MM-DD.json`
 

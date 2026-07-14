@@ -84,23 +84,29 @@ a { color: inherit; }
   white-space: nowrap;
 }
 
-.refresh-btn {
-  font-size: 15px;
-  line-height: 1;
+.tab-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rate-strip {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
   color: var(--ink-2);
-  padding: 8px 0 8px 8px;
+  text-decoration: none;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-bottom: 4px;
 }
 
-.refresh-btn:hover { color: var(--accent); }
+.rate-strip:hover { color: var(--accent); }
+.rate-strip .rs-item b { font-weight: 700; color: var(--ink-3); margin-right: 3px; font-size: 10px; }
 
-.refresh-btn.spin {
-  animation: refresh-spin 0.8s linear infinite;
-  pointer-events: none;
-}
-
-@keyframes refresh-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+@media (max-width: 700px) {
+  .rate-strip { display: none; } /* strip needs room; Rates tab covers mobile */
 }
 
 #toast {
@@ -331,16 +337,34 @@ main {
   letter-spacing: 1.1px;
   text-transform: uppercase;
   color: var(--ink-3);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .story .meta .cadence { color: var(--accent); font-weight: 700; }
 
-@media (hover: hover) {
-  .story:hover { border-color: var(--ink-3); }
-  .story:hover h3 { color: var(--accent); }
+.story .meta-open { color: var(--accent); font-weight: 700; white-space: nowrap; }
+
+.story .meta-source {
+  color: var(--ink-3);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  padding: 4px 0 4px 8px; /* generous tap target */
 }
 
-.story:active h3 { color: var(--accent); }
+.story .meta-source:hover { color: var(--accent); }
+
+.story.static { cursor: default; }
+
+@media (hover: hover) {
+  .story:not(.static):hover { border-color: var(--ink-3); }
+  .story:not(.static):hover h3 { color: var(--accent); }
+}
+
+.story:not(.static):active h3 { color: var(--accent); }
 
 /* ---------- Notes / colophon ---------- */
 #day-notes {
@@ -436,9 +460,59 @@ main {
 .leaflet-popup-tip { background: var(--box); }
 
 @media (prefers-color-scheme: dark) {
-  #map-canvas .leaflet-tile-pane { filter: grayscale(0.3) invert(0.92) hue-rotate(180deg) brightness(0.9); }
-  .leaflet-control-attribution { background: rgba(20,19,16,0.7) !important; color: var(--ink-3) !important; }
+  .leaflet-control-attribution { background: rgba(16,18,20,0.7) !important; color: var(--ink-3) !important; }
 }
+
+/* ---------- Rates ---------- */
+.rate-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.rate-tile {
+  background: var(--box);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.rt-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.rt-value {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.rt-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 2px; }
+
+.curve-wrap {
+  background: var(--box);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 14px 10px 6px;
+}
+
+.curve-wrap svg { width: 100%; height: auto; display: block; }
+
+.cv-grid { stroke: var(--rule); stroke-width: 1; }
+.cv-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.cv-dot { fill: var(--box); stroke: var(--accent); stroke-width: 2; }
+.cv-dot.key { fill: var(--accent); }
+.cv-hit { fill: transparent; cursor: default; }
+.cv-ylabel, .cv-xlabel { font-size: 10px; fill: var(--ink-3); font-family: var(--sans); }
+.cv-vlabel { font-size: 11px; font-weight: 700; fill: var(--ink); font-family: var(--sans); }
+
+.rates-note { margin-top: 18px; font-size: 11.5px; color: var(--ink-3); }
 
 /* ---------- Weekly ---------- */
 .week-label {

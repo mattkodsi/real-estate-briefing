@@ -76,11 +76,11 @@ async function init() {
 
   $("prev-day").addEventListener("click", () => stepDay(-1));
   $("next-day").addEventListener("click", () => stepDay(1));
-  $("refresh-btn").addEventListener("click", () => refreshData(false));
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshData(true);
   });
   setInterval(() => { if (!document.hidden) refreshData(true); }, 10 * 60 * 1000);
+  loadRates();
   $("reader-back").addEventListener("click", () => closeReaderNav());
   $("map-mode-day").addEventListener("click", () => setMapMode("day"));
   $("map-mode-all").addEventListener("click", () => setMapMode("all"));
@@ -122,8 +122,6 @@ let toastTimer;
 async function refreshData(silent) {
   if (refreshing) return;
   refreshing = true;
-  const btn = $("refresh-btn");
-  btn.classList.add("spin");
   try {
     await fetchIndex();
 
@@ -141,13 +139,10 @@ async function refreshData(silent) {
     const changed = !!fresh && fresh.generatedAt !== before;
 
     const readerOpen = !$("reader").hidden;
-    if ((changed && !readerOpen) || !silent) route();
+    if (changed && !readerOpen) route();
     if (changed) flashToast("Briefing updated");
-    else if (!silent) flashToast("Up to date — new editions arrive with the next compile");
-  } catch {
-    if (!silent) flashToast("Refresh failed");
-  }
-  btn.classList.remove("spin");
+    loadRates();
+  } catch { /* silent background refresh */ }
   refreshing = false;
 }
 
@@ -186,6 +181,9 @@ function route() {
   } else if (h === "#/history") {
     showView("history");
     renderHistory();
+  } else if (h === "#/rates") {
+    showView("rates");
+    renderRates();
   } else {
     showView("briefing");
     renderBriefing(state.currentDate);
@@ -259,10 +257,20 @@ async function renderBriefing(date) {
     : "";
 }
 
-function readMinutes(story) {
+function contentWords(story) {
   if (!story.content) return 0;
-  const words = story.content.replace(/<[^>]+>/g, " ").split(/\s+/).length;
-  return Math.max(1, Math.round(words / 220));
+  return story.content.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+}
+
+function readMinutes(story) {
+  const words = contentWords(story);
+  return words ? Math.max(1, Math.round(words / 220)) : 0;
+}
+
+/* A card is worth opening only when the article holds meaningfully more text
+   than the card already shows (short Traded blurbs are fully visible in place). */
+function isExpandable(story) {
+  return contentWords(story) >= 80;
 }
 
 function cadenceLabel(story) {
@@ -270,21 +278,40 @@ function cadenceLabel(story) {
   return story.cadence === "weekly" ? "Weekly" : "Special";
 }
 
-function storyMeta(story) {
-  const span = document.createElement("div");
-  span.className = "meta";
+function storyMeta(story, expandable) {
+  const row = document.createElement("div");
+  row.className = "meta";
+  const left = document.createElement("span");
   const cad = cadenceLabel(story);
   if (cad) {
     const c = document.createElement("span");
     c.className = "cadence";
     c.textContent = cad + " · ";
-    span.appendChild(c);
+    left.appendChild(c);
   }
   const bits = [(story.sources || []).join(" · ")];
-  const mins = readMinutes(story);
-  if (mins) bits.push(`${mins} min`);
-  span.appendChild(document.createTextNode(bits.filter(Boolean).join(" · ")));
-  return span;
+  if (expandable) {
+    const mins = readMinutes(story);
+    if (mins) bits.push(`${mins} min`);
+  }
+  left.appendChild(document.createTextNode(bits.filter(Boolean).join(" · ")));
+  row.appendChild(left);
+
+  if (expandable) {
+    const open = document.createElement("span");
+    open.className = "meta-open";
+    open.textContent = "Read ›";
+    row.appendChild(open);
+  } else if (story.url) {
+    const a = document.createElement("a");
+    a.className = "meta-source";
+    a.href = story.url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "Source ↗";
+    row.appendChild(a);
+  }
+  return row;
 }
 
 function chip(text, cls) {
@@ -311,23 +338,26 @@ function storyChips(story) {
 }
 
 function storyRow(story, date, lead) {
-  const btn = document.createElement("button");
-  btn.className = "story" + (lead ? " lead" : "");
-  btn.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
+  const expandable = isExpandable(story);
+  const el = document.createElement(expandable ? "button" : "div");
+  el.className = "story" + (lead ? " lead" : "") + (expandable ? "" : " static");
+  if (expandable) {
+    el.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
+  }
 
   const h3 = document.createElement("h3");
   h3.textContent = story.title;
-  btn.appendChild(h3);
+  el.appendChild(h3);
 
   if (story.summary) {
     const p = document.createElement("p");
     p.textContent = story.summary;
-    btn.appendChild(p);
+    el.appendChild(p);
   }
   const chips = storyChips(story);
-  if (chips) btn.appendChild(chips);
-  btn.appendChild(storyMeta(story));
-  return btn;
+  if (chips) el.appendChild(chips);
+  el.appendChild(storyMeta(story, expandable));
+  return el;
 }
 
 function sectionHead(label) {
@@ -527,11 +557,18 @@ async function renderMap() {
   }
 
   if (!state.map) {
-    state.map = L.map("map-canvas", { scrollWheelZoom: true });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      maxZoom: 19,
-    }).addTo(state.map);
+    state.map = L.map("map-canvas", {
+      scrollWheelZoom: true,
+      wheelPxPerZoomLevel: 120,
+      wheelDebounceTime: 25,
+      zoomAnimation: true,
+      fadeAnimation: true,
+    });
+    addTileLayer();
+    // swap basemap when the OS theme flips
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (state.map) addTileLayer();
+    });
     state.markers = L.layerGroup().addTo(state.map);
   }
 
@@ -595,6 +632,22 @@ async function renderMap() {
     else if (pts.length === 1) state.map.setView(pts[0], 11);
     else state.map.setView([39.5, -95], 4); // continental US
   });
+}
+
+function addTileLayer() {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  if (state.tiles) state.map.removeLayer(state.tiles);
+  // CARTO basemaps: retina ({r}) tiles, so no blur on 2x screens
+  state.tiles = L.tileLayer(
+    `https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`,
+    {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: "abcd",
+      maxZoom: 20,
+      keepBuffer: 6,          // keep tiles around the viewport so panning never blanks
+      updateWhenZooming: false, // don't re-request mid-pinch; settle, then load
+    }
+  ).addTo(state.map);
 }
 
 function renderMapLegend(typeTally) {
@@ -734,6 +787,166 @@ async function renderHistory() {
 
     wrap.appendChild(card);
   }
+}
+
+/* ---------- rates ---------- */
+
+const TENOR_MONTHS = { "1M": 1, "2M": 2, "3M": 3, "4M": 4, "6M": 6, "1Y": 12, "2Y": 24, "3Y": 36, "5Y": 60, "7Y": 84, "10Y": 120, "20Y": 240, "30Y": 360 };
+
+async function loadRates() {
+  try {
+    const rows = await sb("rates?select=data&order=date.desc&limit=1");
+    state.rates = rows[0]?.data ?? null;
+  } catch { state.rates = null; }
+  renderRateStrip();
+  if (!$("view-rates").hidden) renderRates();
+}
+
+function pct(n) {
+  return n == null ? "—" : n.toFixed(2) + "%";
+}
+
+function renderRateStrip() {
+  const strip = $("rate-strip");
+  const r = state.rates;
+  if (!r?.treasury) { strip.hidden = true; return; }
+  strip.hidden = false;
+  strip.innerHTML = "";
+  const items = [
+    ["5Y", r.treasury["5Y"]],
+    ["10Y", r.treasury["10Y"]],
+    ["30Y", r.treasury["30Y"]],
+    ["SOFR", r.sofr?.rate],
+  ];
+  for (const [label, val] of items) {
+    const span = document.createElement("span");
+    span.className = "rs-item";
+    span.innerHTML = `<b>${label}</b> ${val == null ? "—" : val.toFixed(2)}`;
+    strip.appendChild(span);
+  }
+}
+
+function rateTile(label, value, sub) {
+  const div = document.createElement("div");
+  div.className = "rate-tile";
+  const l = document.createElement("div");
+  l.className = "rt-label";
+  l.textContent = label;
+  const v = document.createElement("div");
+  v.className = "rt-value";
+  v.textContent = pct(value);
+  div.append(l, v);
+  if (sub) {
+    const s = document.createElement("div");
+    s.className = "rt-sub";
+    s.textContent = sub;
+    div.appendChild(s);
+  }
+  return div;
+}
+
+function renderRates() {
+  const wrap = $("rates-content");
+  wrap.innerHTML = "";
+  const r = state.rates;
+  if (!r?.treasury) {
+    const p = document.createElement("p");
+    p.style.cssText = "font-style:italic;color:var(--ink-2);padding:40px 0;text-align:center";
+    p.textContent = "Rates arrive with the next pipeline run.";
+    wrap.appendChild(p);
+    return;
+  }
+
+  // headline tiles
+  wrap.appendChild(sectionHead("Key Rates"));
+  const tiles = document.createElement("div");
+  tiles.className = "rate-tiles";
+  tiles.appendChild(rateTile("SOFR", r.sofr?.rate, "overnight, " + (r.sofr?.date || "")));
+  tiles.appendChild(rateTile("5-Year", r.treasury["5Y"], "treasury"));
+  tiles.appendChild(rateTile("10-Year", r.treasury["10Y"], "treasury"));
+  tiles.appendChild(rateTile("30-Year", r.treasury["30Y"], "treasury"));
+  wrap.appendChild(tiles);
+
+  // yield curve
+  wrap.appendChild(sectionHead("Treasury Yield Curve"));
+  const chart = document.createElement("div");
+  chart.className = "curve-wrap";
+  chart.appendChild(buildCurveSvg(r.treasury));
+  wrap.appendChild(chart);
+
+  // SOFR averages
+  const a = r.sofrAverages || {};
+  wrap.appendChild(sectionHead("SOFR Compounded Averages"));
+  const avgTiles = document.createElement("div");
+  avgTiles.className = "rate-tiles";
+  avgTiles.appendChild(rateTile("30-Day", a["30d"]));
+  avgTiles.appendChild(rateTile("90-Day", a["90d"]));
+  avgTiles.appendChild(rateTile("180-Day", a["180d"]));
+  wrap.appendChild(avgTiles);
+
+  const note = document.createElement("p");
+  note.className = "rates-note";
+  note.textContent = `Treasury par yield curve as of ${r.curveDate}; SOFR published by the New York Fed (${r.sofr?.date}). Updated with each pipeline run.`;
+  wrap.appendChild(note);
+}
+
+function buildCurveSvg(t) {
+  const pts = Object.entries(TENOR_MONTHS)
+    .filter(([k]) => t[k] != null)
+    .map(([k, m]) => ({ label: k, months: m, rate: t[k] }));
+  if (!pts.length) return document.createTextNode("");
+
+  const W = 680, H = 300, padL = 44, padR = 20, padT = 18, padB = 30;
+  const xs = (m) => padL + (Math.sqrt(m) - 1) / (Math.sqrt(360) - 1) * (W - padL - padR);
+  const rates = pts.map((p) => p.rate);
+  const yMin = Math.floor(Math.min(...rates) * 4) / 4 - 0.25;
+  const yMax = Math.ceil(Math.max(...rates) * 4) / 4 + 0.25;
+  const ys = (r) => padT + (yMax - r) / (yMax - yMin) * (H - padT - padB);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Treasury par yield curve, " + pts.map((p) => `${p.label} ${p.rate}%`).join(", "));
+  const put = (tag, attrs, text) => {
+    const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    if (text != null) el.textContent = text;
+    svg.appendChild(el);
+    return el;
+  };
+
+  // recessive horizontal grid at 0.5% steps
+  for (let g = Math.ceil(yMin * 2) / 2; g <= yMax; g += 0.5) {
+    put("line", { x1: padL, x2: W - padR, y1: ys(g), y2: ys(g), class: "cv-grid" });
+    put("text", { x: padL - 8, y: ys(g) + 3.5, class: "cv-ylabel", "text-anchor": "end" }, g.toFixed(1));
+  }
+
+  // x labels (selective)
+  for (const p of pts) {
+    if (!["1M", "3M", "6M", "1Y", "2Y", "3Y", "5Y", "7Y", "10Y", "20Y", "30Y"].includes(p.label)) continue;
+    put("text", { x: xs(p.months), y: H - 8, class: "cv-xlabel", "text-anchor": "middle" }, p.label);
+  }
+
+  // the curve
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${xs(p.months).toFixed(1)},${ys(p.rate).toFixed(1)}`).join(" ");
+  put("path", { d, class: "cv-line" });
+
+  // dots — key tenors emphasized and direct-labeled
+  const KEY = new Set(["5Y", "10Y", "30Y"]);
+  for (const p of pts) {
+    const key = KEY.has(p.label);
+    put("circle", { cx: xs(p.months), cy: ys(p.rate), r: key ? 5 : 3, class: key ? "cv-dot key" : "cv-dot" });
+    if (key) {
+      put("text", { x: xs(p.months), y: ys(p.rate) - 11, class: "cv-vlabel", "text-anchor": "middle" }, p.rate.toFixed(2));
+    }
+    // generous invisible hit target with a native tooltip
+    const hit = put("circle", { cx: xs(p.months), cy: ys(p.rate), r: 13, class: "cv-hit" });
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = `${p.label}: ${p.rate.toFixed(2)}%`;
+    hit.appendChild(title);
+  }
+
+  return svg;
 }
 
 /* ---------- reader ---------- */
