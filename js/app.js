@@ -92,6 +92,21 @@ async function init() {
 
   $("prev-day").addEventListener("click", () => stepDay(-1));
   $("next-day").addEventListener("click", () => stepDay(1));
+
+  // manual refresh — one clean 360° per tap (re-armed each click), toast on result.
+  // Class removed on a timer matched to the CSS duration (animationend doesn't
+  // fire reliably on inline SVG in every engine), so the stop is deterministic.
+  const refreshBtn = $("refresh-btn");
+  let spinTimer;
+  refreshBtn.addEventListener("click", () => {
+    refreshBtn.classList.remove("spinning");
+    void refreshBtn.offsetWidth; // reflow so a rapid re-tap restarts the spin from 0°
+    refreshBtn.classList.add("spinning");
+    clearTimeout(spinTimer);
+    spinTimer = setTimeout(() => refreshBtn.classList.remove("spinning"), 720);
+    refreshData(false, true);
+  });
+
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshData(true);
   });
@@ -157,7 +172,7 @@ async function getWeek(weekOf) {
 let refreshing = false;
 let toastTimer;
 
-async function refreshData(silent) {
+async function refreshData(silent, manual) {
   if (refreshing) return;
   refreshing = true;
   try {
@@ -181,8 +196,11 @@ async function refreshData(silent) {
     const readerOpen = !$("reader").hidden;
     if (changed && !readerOpen) route();
     if (changed) flashToast("Briefing updated");
+    else if (manual) flashToast("Up to date");
     loadRates();
-  } catch { /* silent background refresh */ }
+  } catch {
+    if (manual) flashToast("Couldn't refresh — try again");
+  }
   refreshing = false;
 }
 

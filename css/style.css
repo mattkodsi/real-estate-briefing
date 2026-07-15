@@ -76,6 +76,50 @@ a { color: inherit; }
   gap: 4px;
 }
 
+/* date scrubber + refresh, grouped at the right of the masthead row */
+.masthead-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--ink-2);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.refresh-btn:hover { color: var(--accent); }
+.refresh-btn:active { background: var(--rule); }
+
+.refresh-btn svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Spin the button (not the inline SVG — some engines don't animate SVG
+   transforms). The 16px icon is centered in the 30px button, so rotating the
+   button around its own center spins the icon around the icon's center: a
+   clean, wobble-free turn. One full rotation per tap, always ending at 0°. */
+.refresh-btn { transform-origin: 50% 50%; }
+.refresh-btn.spinning { animation: refresh-spin 0.7s cubic-bezier(0.33, 0, 0.2, 1); }
+
+@keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
 .date-nav {
   display: flex;
   align-items: center;
