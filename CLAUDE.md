@@ -90,7 +90,7 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
       "image": "hero image URL or null",
       "locations": [{ "label": "human-readable place", "lat": 0.0, "lng": 0.0 }],
       "content": "<p>sanitized article HTML (p/h2/h3/blockquote/ul/ol/li/img/figure/figcaption) or null</p>",
-      "explainer": "plain-English rewrite for dense stories, rendered in a box UNDER the full article (see Writing style); null for most stories"
+      "explainer": "plain-English rewrite for any story with an economic/policy/structural concept a non-specialist couldn't grasp from the text — bias toward inclusion (see Writing style); null only for self-explanatory deal/listing/personnel items"
     }
   ],
   "notes": "optional: anything unusual (missing editions, new subscriptions)"
@@ -176,7 +176,8 @@ The whole dictionary in one file; `push_data.py` upserts each entry as its own `
 - `watch`: 1–3 forward-looking catalysts with dates ("Fed bill-purchase decision Aug. 13", "S2's five North Texas foreclosure auctions land this month"), ≤20 words each, drawn from today's and recent stories. Only include real, dated events — never vague "keep an eye on" items.
 - `summary` (per story): concrete who/what/how-much, actors identified the same way, in your own words.
 - `content` is mechanical extraction (email body or fetch_article.py output), not rewriting.
-- `explainer` (optional, per story): for stories whose article assumes mechanics a smart non-specialist wouldn't know — Fed plumbing, securitization/CMBS, rate math, legal/land-use structures — write 2–4 short paragraphs that re-tell the story plainly: what happened, how the mechanism works (define each moving part in a clause), and why it matters for real estate. End with the "so what". Separate paragraphs with \\n\\n. It renders in a box under the full article as a supplement, never a replacement. Most stories don't need one; add it only where the source text would genuinely lose a general reader — target 2–5 per day, null otherwise.
+- `explainer` (optional, per story): a plain-English re-telling for any story that rests on a mechanism, concept, or consequence a smart *non-specialist* couldn't fully grasp from the article alone — this is broader than jargon. Include one when the story turns on: financial/monetary mechanics (Fed plumbing, securitization/CMBS, rate math, cap rates); a policy or legal structure and its second-order effects (rent regulation, zoning/land-use, tax programs, antitrust); market dynamics or "why this matters" that isn't self-evident (why a floating-rate unwind cascades, why consolidation raises fees, why a data-center moratorium reshapes industrial demand). Write 2–4 short paragraphs: what happened, how the mechanism works (define each moving part in a clause), and the "so what" for real estate. Separate paragraphs with \\n\\n. Renders in a box under the full article as a supplement, never a replacement.
+  - **Bias toward inclusion — when in doubt, write one.** The cost of an unneeded explainer is small (a reader skips it); the cost of a missing one is a reader who doesn't understand the story. Skip it ONLY for genuinely self-explanatory items: a straight building sale/lease, a home listing, a personnel move, a short deal blurb. Everything with an economic, policy, or structural angle gets one. Expect this to be the majority of non-transactional stories — roughly 6–12 on a normal day, not a rare flourish.
 - Section names stay short and reusable day-to-day.
 - `shortDef`/`definition` (dictionary terms): explain the mechanism, not just a synonym — a reader should understand *why* it matters, not just what to call it. No circular definitions ("a cap rate is a rate used to cap...").
 
