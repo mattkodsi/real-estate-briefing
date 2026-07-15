@@ -268,6 +268,35 @@ main {
   margin-top: 4px;
 }
 
+/* Watch row: dated forward catalysts closing the lede block */
+#watch-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.watch-label {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-top: 2px;
+}
+
+.watch-items { min-width: 0; }
+
+.watch-item {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.watch-item + .watch-item { margin-top: 5px; }
+
 /* ---------- Chips (taxonomy tags) ---------- */
 .chips {
   display: flex;

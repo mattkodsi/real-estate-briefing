@@ -60,8 +60,9 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
 {
   "date": "YYYY-MM-DD",
   "generatedAt": "ISO-8601 UTC",
-  "overview": "3–6 sentence executive summary a reader with zero prior knowledge can follow — every entity identified, mechanisms in numbers, why it matters (see Writing style)",
+  "overview": "≈100-word signal lede: the through-line and arc movement, NOT a restatement of the keyPoints (see Writing style)",
   "keyPoints": ["4–8 self-contained takeaways: identified actor + number + why it matters (see Writing style)"],
+  "watch": ["1–3 dated upcoming catalysts (auctions, trials, policy deadlines, Fed decisions) from today's and recent coverage; [] if none"],
   "stories": [
     {
       "id": "kebab-slug",
@@ -135,8 +136,10 @@ The whole roster in one file; `push_data.py` upserts each entry as its own `play
 
 **Write for a smart reader who doesn't know any of the names — in as few words as possible.** Every company and person gets a compact identifying clause on first reference in any prose field: "Dallas syndicator S2 Capital", "ex-Buffett protégé Ian Jacobs", "Asana Partners, a Charlotte urban-retail specialist" — never a bare name, never a full sentence of biography. Assume no memory of prior days' coverage. Maximize information per word: keep every number, cut connective tissue. Targets: `overview` ≈ 100 words; each `keyPoint` ≤ 30 words.
 
-- `overview` is an executive summary, not a table of contents. Lead with the day's most consequential story; give the mechanism in numbers (rents −24%, interest costs +50%); say why it matters as a market signal; then the second theme; then breadth. Ban scene-setting filler — "rounds out today's coverage", "claims another victim", "a busy day in…" carry zero information.
+- `overview` and `keyPoints` do different jobs and must not overlap. The bullets carry the facts; the overview carries the *meaning*. Never write the overview as a prose version of the bullets.
+- `overview` is the **signal lede**: (a) the through-line connecting today's stories, (b) how today moves the running arcs — cite prior coverage when it does ("a day after Compass's $1.6B Anywhere deal drew a class action…"), (c) the stakes. Fetch the prior 2–3 days from Supabase (same query as the weekly rollup) and read their overviews/keyPoints before writing it — continuity is the point. It may reference bullet facts as evidence in an argument, never re-explain them. Ban scene-setting filler — "rounds out today's coverage", "a busy day in…" carry zero information.
 - `keyPoints`: each bullet stands alone as identified actor + number + significance. The test: someone reading only the bullets, knowing nothing, should come away understanding the day.
+- `watch`: 1–3 forward-looking catalysts with dates ("Fed bill-purchase decision Aug. 13", "S2's five North Texas foreclosure auctions land this month"), ≤20 words each, drawn from today's and recent stories. Only include real, dated events — never vague "keep an eye on" items.
 - `summary` (per story): concrete who/what/how-much, actors identified the same way, in your own words.
 - `content` is mechanical extraction (email body or fetch_article.py output), not rewriting.
 - Section names stay short and reusable day-to-day.

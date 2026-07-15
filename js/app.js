@@ -279,6 +279,27 @@ async function renderBriefing(date) {
   }
   linkifyElement(kp);
 
+  // forward-looking catalysts (newer day files; absent on old ones)
+  const watch = $("watch-row");
+  watch.hidden = !(day.watch || []).length;
+  watch.innerHTML = "";
+  if (!watch.hidden) {
+    const label = document.createElement("span");
+    label.className = "watch-label";
+    label.textContent = "Watch";
+    watch.appendChild(label);
+    const list = document.createElement("div");
+    list.className = "watch-items";
+    for (const item of day.watch) {
+      const el = document.createElement("div");
+      el.className = "watch-item";
+      el.textContent = item;
+      list.appendChild(el);
+    }
+    linkifyElement(list);
+    watch.appendChild(list);
+  }
+
   if (state.controlsDate !== date) {
     state.filters = { type: null, asset: null, market: null };
     state.controlsDate = date;
