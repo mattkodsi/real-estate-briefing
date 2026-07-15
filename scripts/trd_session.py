@@ -1,29 +1,40 @@
 #!/usr/bin/env python3
 """Store a The Real Deal subscriber session so the cloud pipeline can fetch
-subscriber articles. Two ways to run it (yourself, locally):
+subscriber articles.
 
-1. Email + password login:
-     python3 scripts/trd_session.py you@example.com
-   Prompts for your TRD password (hidden, never stored anywhere), logs in at
-   therealdeal.com/wp-login.php, and saves ONLY the session cookies.
-   Signed in through Google instead? Set a TRD password first via
-   https://therealdeal.com/wp-login.php?action=lostpassword (your Google
-   sign-in keeps working; the account just gains a password too).
+TRD's reader site is a Next.js app with its own login/subscription system —
+it is NOT WordPress auth, so a scripted email+password login does not work
+(wp-login.php doesn't know your reader account). The reliable way is to copy
+the session cookies from a browser where you're already signed in (via Google
+or password, either is fine).
 
-2. Paste cookies from a browser where you're already signed in:
-     python3 scripts/trd_session.py --cookie
-   Then paste the cookie string when prompted. To get it: open therealdeal.com
-   logged in → DevTools → Application → Cookies → copy every cookie whose name
-   starts with "wordpress_" (not "wordpress_test") as "name=value; name2=value2".
+HOW TO RUN IT (yourself, locally):
 
-Either way the cookies land in the Supabase `secrets` table (row
-"trd_session") and scripts/fetch_article.py uses them automatically for any
-therealdeal.com URL. WordPress sessions last ~14 days — re-run this when the
-pipeline's day notes say TRD fetches hit the paywall.
+  python3 scripts/trd_session.py --cookie [optional-article-url]
+
+  Then paste your therealdeal.com cookie string. To get it:
+    1. Sign in at therealdeal.com in your browser.
+    2. Open DevTools (Cmd+Opt+I) → Network tab → reload the page.
+    3. Click the top document request → Headers → Request Headers →
+       copy the entire value of the "cookie:" line.
+    (Copying the whole cookie header is the robust move — it captures whatever
+     cookie TRD uses to gate articles, without guessing names.)
+
+  If you pass an article URL, the script test-fetches it with your cookies and
+  reports the word count so you can confirm it beat the paywall before saving.
+
+The cookies land in the Supabase `secrets` table (row "trd_session") and
+scripts/fetch_article.py uses them automatically for any therealdeal.com URL.
+Sessions expire after a couple of weeks — re-run this when the pipeline's day
+notes say TRD fetches hit the paywall.
+
+(Legacy: `python3 scripts/trd_session.py you@example.com` still attempts a
+WordPress login for the rare account that has one, but --cookie is preferred.)
 """
 import getpass
 import http.cookiejar
 import json
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -35,28 +46,25 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML,
 LOGIN_URL = "https://therealdeal.com/wp-login.php"
 
 
-def verify_and_store(cookie_header: str, how: str) -> None:
-    """Confirm the cookie is a live subscriber session, then save it."""
-    req = urllib.request.Request(
-        "https://therealdeal.com/",
-        headers={"User-Agent": UA, "Cookie": cookie_header},
-    )
+def _article_words(url: str, cookie_header: str) -> int:
+    """Fetch an article with the cookie and count visible words (rough paywall test)."""
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Cookie": cookie_header, "Accept": "text/html"})
     with urllib.request.urlopen(req, timeout=30) as r:
-        page = r.read().decode("utf-8", errors="replace")
-    if "wp-login.php" in cookie_header:  # sanity: someone pasted a URL
-        raise SystemExit("That looks like a URL, not a cookie string.")
-    logged_in = "logout" in page.lower() or "my-account" in page.lower() or "wp-admin" in page.lower()
-    if not logged_in:
-        print("WARN could not positively confirm the session on the homepage — storing anyway; "
-              "watch the next pipeline run's notes.")
+        html = r.read().decode("utf-8", errors="replace")
+    # count words inside <p> tags only — the article body
+    paras = re.findall(r"<p[^>]*>(.*?)</p>", html, re.S)
+    text = re.sub(r"<[^>]+>", " ", " ".join(paras))
+    return len(text.split())
 
+
+def store(cookie_header: str, how: str) -> None:
     row = {
         "id": "trd_session",
         "data": {
             "cookie": cookie_header,
             "savedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "via": how,
-            "note": "WordPress session cookies only; password is never stored.",
+            "note": "Browser session cookies only; no password is ever stored.",
         },
     }
     req = urllib.request.Request(
@@ -72,51 +80,69 @@ def verify_and_store(cookie_header: str, how: str) -> None:
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         assert resp.status in (200, 201)
-    print("Session cookie stored. The pipeline will now fetch TRD subscriber articles automatically.")
+    print("Session cookie stored. The pipeline will now use it for therealdeal.com articles.")
+
+
+def run_cookie_mode() -> None:
+    test_url = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("http"):
+            test_url = arg
+    print("Paste your therealdeal.com cookie string (the whole 'cookie:' request header):")
+    cookie = input("> ").strip().strip('"').strip("'")
+    if cookie.lower().startswith("cookie:"):
+        cookie = cookie[len("cookie:"):].strip()
+    if not cookie or "=" not in cookie:
+        raise SystemExit("That doesn't look like a cookie string.")
+
+    if test_url:
+        try:
+            n = _article_words(test_url, cookie)
+            print(f"Test fetch of {test_url}: {n} words in the article body.")
+            if n < 150:
+                print("WARN that's short — the cookie may not be unlocking full articles. "
+                      "Double-check you copied the whole cookie header while signed in.")
+        except Exception as e:  # noqa: BLE001
+            print(f"WARN test fetch failed ({e}); storing the cookie anyway.")
+    else:
+        print("Tip: re-run with a subscriber article URL to verify, e.g.\n"
+              "  python3 scripts/trd_session.py --cookie https://therealdeal.com/new-york/2026/07/15/<slug>/")
+    store(cookie, "pasted-cookie")
+
+
+def run_login_mode() -> None:
+    email = sys.argv[1]
+    password = getpass.getpass("TRD password (hidden, used once, never stored): ")
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    opener.addheaders = [("User-Agent", UA), ("Referer", LOGIN_URL)]
+    opener.open(LOGIN_URL, timeout=30)  # prime test cookie
+    form = urllib.parse.urlencode({
+        "log": email, "pwd": password, "rememberme": "forever",
+        "wp-submit": "Log In", "redirect_to": "https://therealdeal.com/", "testcookie": "1",
+    }).encode()
+    opener.open(LOGIN_URL, data=form, timeout=30)
+    session_cookies = {c.name: c.value for c in jar if "wordpress" in c.name.lower() and "test" not in c.name.lower()}
+    if not any("logged_in" in n for n in session_cookies):
+        raise SystemExit(
+            "WordPress login failed (TRD's reader accounts usually aren't WordPress users).\n"
+            "Use the cookie method instead:\n"
+            "  python3 scripts/trd_session.py --cookie\n"
+            "and paste the cookie header from your signed-in browser (see the header of this file)."
+        )
+    cookie_header = "; ".join(f"{n}={v}" for n, v in session_cookies.items())
+    print(f"Logged in as {email} ({len(session_cookies)} session cookies).")
+    store(cookie_header, "wp-login")
 
 
 def main() -> None:
     if "--cookie" in sys.argv:
-        print("Paste the cookie string from your logged-in browser")
-        print('(DevTools → Application → Cookies → therealdeal.com; every "wordpress_*" cookie as name=value; name2=value2):')
-        cookie = input("> ").strip().strip('"')
-        if not cookie or "=" not in cookie:
-            raise SystemExit("That doesn't look like a cookie string.")
-        verify_and_store(cookie, "pasted-cookie")
-        return
-
-    email = sys.argv[1] if len(sys.argv) > 1 else input("TRD account email: ").strip()
-    password = getpass.getpass("TRD password (hidden, used once, never stored): ")
-
-    jar = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-    opener.addheaders = [("User-Agent", UA), ("Referer", LOGIN_URL)]
-
-    # prime cookies (WP sets a test cookie on GET)
-    opener.open(LOGIN_URL, timeout=30)
-
-    form = urllib.parse.urlencode({
-        "log": email,
-        "pwd": password,
-        "rememberme": "forever",
-        "wp-submit": "Log In",
-        "redirect_to": "https://therealdeal.com/",
-        "testcookie": "1",
-    }).encode()
-    opener.open(LOGIN_URL, data=form, timeout=30)
-
-    session_cookies = {c.name: c.value for c in jar if "wordpress" in c.name.lower() and "test" not in c.name.lower()}
-    if not any("logged_in" in n for n in session_cookies):
-        raise SystemExit(
-            "Login failed — no wordpress_logged_in cookie returned.\n"
-            "If your TRD account uses Google sign-in, either set a password first via\n"
-            "https://therealdeal.com/wp-login.php?action=lostpassword (Google sign-in keeps working),\n"
-            "or run: python3 scripts/trd_session.py --cookie   and paste cookies from your browser."
-        )
-
-    cookie_header = "; ".join(f"{n}={v}" for n, v in session_cookies.items())
-    print(f"Logged in as {email} ({len(session_cookies)} session cookies).")
-    verify_and_store(cookie_header, "wp-login")
+        run_cookie_mode()
+    elif len(sys.argv) > 1 and "@" in sys.argv[1]:
+        run_login_mode()
+    else:
+        print(__doc__)
+        sys.exit(0)
 
 
 if __name__ == "__main__":
