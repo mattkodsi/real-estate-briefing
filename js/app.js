@@ -2166,4 +2166,72 @@ function closeReaderNav() {
   else location.hash = "/";
 }
 
-init();
+/* ---------- passcode lock ----------
+   Deterrence for a public URL, not real data security (the Supabase read key
+   ships in this file). A correct entry sets a localStorage flag so the device
+   is remembered and never asked again. The PIN is stored only as a SHA-256
+   hash so the digits aren't sitting in the source. */
+const PIN_HASH = "b6792dadca7cfa5b5aeb02b950f3e717bd3d985346a948ba506293e3fc31c235";
+const UNLOCK_KEY = "briefing_unlocked_v1";
+
+async function sha256Hex(s) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function bootApp() {
+  const lock = $("lock");
+  if (lock) lock.remove();
+  document.body.classList.add("unlocked");
+  init();
+}
+
+function runLock() {
+  const dots = $("lock-dots");
+  const prompt = $("lock-prompt");
+  const keys = $("lock-keys");
+  let entry = "";
+  let busy = false;
+
+  const paint = () => {
+    [...dots.children].forEach((d, i) => d.classList.toggle("on", i < entry.length));
+  };
+  const fail = () => {
+    prompt.textContent = "Incorrect passcode";
+    prompt.classList.add("err");
+    dots.classList.add("shake");
+    setTimeout(() => { dots.classList.remove("shake"); entry = ""; paint(); busy = false; }, 460);
+  };
+  const submit = async () => {
+    busy = true;
+    let ok = false;
+    try { ok = (await sha256Hex(entry)) === PIN_HASH; } catch { ok = false; }
+    if (ok) {
+      try { localStorage.setItem(UNLOCK_KEY, "1"); } catch { /* private mode: still unlock this session */ }
+      bootApp();
+    } else {
+      fail();
+    }
+  };
+
+  keys.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn || busy) return;
+    const k = btn.dataset.k;
+    if (k === "del") {
+      entry = entry.slice(0, -1);
+    } else if (entry.length < 4) {
+      if (prompt.classList.contains("err")) { prompt.textContent = "Enter passcode"; prompt.classList.remove("err"); }
+      entry += k;
+    }
+    paint();
+    if (entry.length === 4) submit();
+  });
+}
+
+(function gate() {
+  let unlocked = false;
+  try { unlocked = localStorage.getItem(UNLOCK_KEY) === "1"; } catch { /* storage blocked */ }
+  if (unlocked) bootApp();
+  else runLock();
+})();
