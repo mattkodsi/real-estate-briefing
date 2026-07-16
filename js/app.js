@@ -417,7 +417,7 @@ function cadenceLabel(story) {
    it is never displayed. Abbreviations are footer-only and limited to names a
    reader already knows; the full article window always spells them out. */
 const SOURCE_ORDER = ["The Real Deal", "Inman", "CRE Daily", "CRE Daily New York", "Traded"];
-const SOURCE_ABBR = { "The Real Deal": "TRD", "CRE Daily New York": "CRE Daily NY" };
+const SOURCE_ABBR = { "The Real Deal": "TRD", "CRE Daily New York": "CRE Daily NY", "The Wall Street Journal": "WSJ" };
 
 function sourceLabels(sources, abbrev) {
   return (sources || []).slice()
@@ -441,6 +441,13 @@ const PUBLISHER_BY_DOMAIN = [
   ["commercialobserver.com", "Commercial Observer"],
   ["bisnow.com", "Bisnow"],
   ["globest.com", "GlobeSt"],
+  ["connectcre.com", "Connect CRE"],
+  ["costar.com", "CoStar"],
+  ["altswire.com", "AltsWire"],
+  ["chainstoreage.com", "Chain Store Age"],
+  ["streeteasy.com", "StreetEasy"],
+  ["rebusinessonline.com", "REBusiness"],
+  ["wsj.com", "The Wall Street Journal"],
   ["traded.co", "Traded"],
   ["tradedmedia.co", "Traded"],
 ];
