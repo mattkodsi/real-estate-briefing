@@ -411,11 +411,6 @@ function cadenceLabel(story) {
   return story.cadence === "weekly" ? "Weekly" : "Special";
 }
 
-// The reader kicker/meta want a word for every story, footer included.
-function cadenceWord(story) {
-  return story.cadence === "weekly" ? "Weekly" : story.cadence === "special" ? "Special" : "Daily";
-}
-
 /* Publishers, in one fixed order so the footer never shows random permutations.
    `sources` already names the original publisher — the story `url` domain is only
    an email tracking-link wrapper (list-manage / beehiiv), never a real source, so
@@ -470,7 +465,10 @@ function publisherFromUrl(url) {
    otherwise the newsletter source(s) in fixed order. `abbrev` swaps in common
    short forms (TRD) for the footer; the reader passes false for full names. */
 function storyPublishers(story, abbrev) {
-  const pub = publisherFromUrl(story.url);
+  // `publisher` is set explicitly by the pipeline (e.g. read from the blurb's
+  // cited source) so a reroute is credited correctly even when the redirect
+  // couldn't be resolved; otherwise derive it from the resolved URL domain.
+  const pub = story.publisher || publisherFromUrl(story.url);
   if (pub) return [(abbrev && SOURCE_ABBR[pub]) || pub];
   return sourceLabels(story.sources, abbrev);
 }
@@ -479,16 +477,19 @@ function storyMeta(story, expandable) {
   const row = document.createElement("div");
   row.className = "meta";
   const left = document.createElement("span");
-  // Consistent footer: Publisher(s) · in fixed order : Cadence [· read time]
-  const srcs = storyPublishers(story, true).join(" · ");
-  let text = srcs ? `${srcs}: ${cadenceWord(story)}` : cadenceWord(story);
+  // Footer: Publisher(s) in fixed order · Cadence (only when Weekly/Special) · read time
+  const parts = [storyPublishers(story, true).join(" · ")];
+  const cad = cadenceLabel(story); // "" for daily — the common case, kept unlabeled
+  if (cad) parts.push(cad);
   if (expandable) {
     const mins = readMinutes(story);
-    if (mins) text += ` · ${mins} min`;
+    if (mins) parts.push(`${mins} min`);
   }
-  left.textContent = text;
+  left.textContent = parts.filter(Boolean).join(" · ");
   row.appendChild(left);
 
+  // C: full text lives at a source we couldn't fetch — signal it reads off-site
+  const blocked = !expandable && !!story.sourceBlocked && !!story.url;
   if (expandable) {
     const open = document.createElement("span");
     open.className = "meta-open";
@@ -496,11 +497,11 @@ function storyMeta(story, expandable) {
     row.appendChild(open);
   } else if (story.url) {
     const a = document.createElement("a");
-    a.className = "meta-source";
+    a.className = blocked ? "meta-source redirect" : "meta-source";
     a.href = story.url;
     a.target = "_blank";
     a.rel = "noopener";
-    a.textContent = "Source ↗";
+    a.textContent = blocked ? "Read at source ↗" : "Source ↗";
     row.appendChild(a);
   }
   return row;
@@ -531,10 +532,20 @@ function storyChips(story) {
 
 function storyRow(story, date, lead) {
   const expandable = isExpandable(story);
+  // C: no in-app text, but a full article lives at a 3rd-party source we couldn't
+  // fetch (blocked). The whole card opens that source — same as the footer link.
+  const blockedSource = !expandable && !!story.sourceBlocked && !!story.url;
   const el = document.createElement(expandable ? "button" : "div");
-  el.className = "story" + (lead ? " lead" : "") + (expandable ? "" : " static");
+  el.className = "story" + (lead ? " lead" : "")
+    + (expandable || blockedSource ? "" : " static")
+    + (blockedSource ? " redirect" : "");
   if (expandable) {
     el.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
+  } else if (blockedSource) {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("a")) return; // let the footer's own link handle its click
+      window.open(story.url, "_blank", "noopener");
+    });
   }
 
   const h3 = document.createElement("h3");

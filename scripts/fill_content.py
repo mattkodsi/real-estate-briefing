@@ -190,6 +190,19 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
 
     blocked = [(i, d) for i, (k, d) in unresolved.items() if k == "blocked"]
     failed = [(i, d) for i, (k, d) in unresolved.items() if k == "failed"]
+
+    # Flag stories whose full text lives at a source we were blocked from: the app
+    # turns those cards into a tap-through to the source (category C). Cleared once a
+    # story has real in-app text, or is just a self-contained blurb (category B).
+    blocked_ids = {i for i, _ in blocked}
+    for s in to_fetch:
+        if _words(s.get("content")) >= 80:
+            s.pop("sourceBlocked", None)
+        elif s.get("id") in blocked_ids:
+            s["sourceBlocked"] = True
+        else:
+            s.pop("sourceBlocked", None)
+
     return {"filled": filled, "failed": failed, "blocked": blocked, "paywalled": paywalled,
             "skipped": skipped, "attempted": len(to_fetch)}
 

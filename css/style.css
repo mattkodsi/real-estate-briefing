@@ -589,6 +589,11 @@ main {
 
 .story.static { cursor: default; }
 
+/* C: card links out to a 3rd-party source (full text we couldn't fetch) —
+   tappable like an in-app card, with a slightly more present "Read at source" cue */
+.story.redirect { cursor: pointer; }
+.story .meta-source.redirect { color: var(--ink-2); }
+
 @media (hover: hover) {
   .story:not(.static):hover { border-color: var(--ink-3); }
   .story:not(.static):hover h3 { color: var(--accent); }
