@@ -1,0 +1,14 @@
+{
+  "name": "Real Estate Briefing",
+  "short_name": "Briefing",
+  "description": "A daily briefing of real estate news: deals, players, jargon, rates, and a deal map.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101214",
+  "theme_color": "#101214",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

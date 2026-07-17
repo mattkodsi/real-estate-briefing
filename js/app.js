@@ -41,6 +41,17 @@ function fmtValue(n) {
   return "$" + Math.round(n / 1e3) + "K";
 }
 
+/* Price-efficiency chip: $/unit when a unit count is known (multifamily), else
+   $/sf when a square footage is known. Both read optional pipeline fields
+   (units / sizeSqft); null when there's no single deal size to divide by. */
+function derivedMetric(story) {
+  const v = story.valueUsd;
+  if (!v) return null;
+  if (story.units > 0) return "$" + Math.round(v / story.units / 1000) + "K/unit";
+  if (story.sizeSqft > 0) return "$" + Math.round(v / story.sizeSqft) + "/sf";
+  return null;
+}
+
 const state = {
   dates: [],
   weeks: [],
@@ -66,6 +77,9 @@ const state = {
   histKey: null,       // which pane's trend is showing: "5Y" | "10Y" | "30Y" | "SOFR"
   histRange: "3M",     // "1M" | "3M" | "6M" | "1Y"
   fwdHorizon: "1Y",    // forward-view horizon: "30D" | "90D" | "6M" | "1Y" | "3Y" | "5Y"
+  allDays: null,       // every day's data, loaded once for Search + Trends
+  searchQuery: "",
+  reader: null,        // { story, date } currently open in the reader
 };
 
 const FWD_HORIZONS = { "30D": 1, "90D": 3, "6M": 6, "1Y": 12, "3Y": 36, "5Y": 60 };
@@ -130,6 +144,8 @@ async function init() {
     refreshData(false, true);
   });
 
+  $("search-btn").addEventListener("click", () => { location.hash = "/search"; });
+
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshData(true);
   });
@@ -179,6 +195,17 @@ async function getDay(date) {
   } catch { return null; }
 }
 
+/* Every day's data in one shot — powers Search and Trends, which reason over the
+   whole archive rather than one day. Cached; cleared on refresh. */
+async function getAllDays() {
+  if (state.allDays) return state.allDays;
+  try {
+    const rows = await sb("days?select=date,data&order=date.desc");
+    state.allDays = rows.map((r) => r.data).filter(Boolean);
+  } catch { state.allDays = []; }
+  return state.allDays;
+}
+
 async function getWeek(weekOf) {
   if (!weekOf) return null;
   if (state.weeksData.has(weekOf)) return state.weeksData.get(weekOf);
@@ -211,6 +238,7 @@ async function refreshData(silent, manual) {
     if (wk) state.weeksData.delete(wk);
     state.players = null; // roster refetches next time the Players view opens
     state.terms = null;   // dictionary refetches next time the Dictionary view opens
+    state.allDays = null; // Search/Trends corpus refetches on next open
 
     const fresh = target ? await getDay(target) : null;
     state.currentDate = target;
@@ -277,6 +305,12 @@ function route() {
   } else if (h === "#/rates") {
     showView("rates");
     renderRates();
+  } else if (h === "#/trends") {
+    showView("trends");
+    renderTrends();
+  } else if (h === "#/search") {
+    showView("search");
+    renderSearch();
   } else {
     showView("briefing");
     renderBriefing(state.currentDate);
@@ -534,6 +568,8 @@ function storyChips(story) {
   if (story.market) wrap.appendChild(chip(story.market));
   const v = fmtValue(story.valueUsd);
   if (v) wrap.appendChild(chip(v, "chip-value"));
+  const per = derivedMetric(story);
+  if (per) wrap.appendChild(chip(per));
   return wrap.children.length ? wrap : null;
 }
 
@@ -1001,6 +1037,251 @@ async function renderHistory() {
     card.appendChild(meta);
 
     wrap.appendChild(card);
+  }
+}
+
+/* ---------- saved stories (bookmarks) ---------- */
+
+const SAVED_KEY = "briefing_saved_v1";
+
+function getSaved() {
+  try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; }
+}
+function setSavedList(list) {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* private mode: no-op */ }
+}
+function savedKey(date, id) { return date + "/" + id; }
+function isSaved(date, id) { return getSaved().some((s) => s.key === savedKey(date, id)); }
+function toggleSaved(story, date) {
+  const key = savedKey(date, story.id);
+  const list = getSaved();
+  const i = list.findIndex((s) => s.key === key);
+  if (i >= 0) list.splice(i, 1);
+  else list.unshift({ key, date, id: story.id, title: story.title, section: story.section || null, market: story.market || null });
+  setSavedList(list);
+  return i < 0; // true if now saved
+}
+
+/* ---------- search ---------- */
+
+async function renderSearch() {
+  const wrap = $("search-content");
+  wrap.innerHTML = "";
+
+  const bar = document.createElement("div");
+  bar.className = "search-bar";
+  const input = document.createElement("input");
+  input.className = "search-input";
+  input.type = "search";
+  input.placeholder = "Search every briefing, players, terms…";
+  input.value = state.searchQuery || "";
+  bar.appendChild(input);
+  wrap.appendChild(bar);
+
+  const results = document.createElement("div");
+  results.id = "search-results";
+  wrap.appendChild(results);
+
+  const [days, players, terms] = await Promise.all([getAllDays(), getPlayers(), getTerms()]);
+  const run = () => { state.searchQuery = input.value; renderSearchResults(results, days, players, terms); };
+  input.addEventListener("input", run);
+  run();
+  input.focus();
+}
+
+function searchStoryRow(date, id, title, meta) {
+  const el = document.createElement("button");
+  el.className = "search-story";
+  el.addEventListener("click", () => { location.hash = `/story/${date}/${id}`; });
+  const h = document.createElement("h4");
+  h.textContent = title;
+  el.appendChild(h);
+  if (meta) {
+    const m = document.createElement("div");
+    m.className = "meta";
+    m.textContent = meta;
+    el.appendChild(m);
+  }
+  return el;
+}
+
+function renderSearchResults(root, days, players, terms) {
+  root.innerHTML = "";
+  const q = (state.searchQuery || "").trim().toLowerCase();
+
+  // empty query → the Saved list is this surface's resting state
+  if (!q) {
+    const saved = getSaved();
+    if (!saved.length) {
+      const p = document.createElement("p");
+      p.className = "search-hint";
+      p.textContent = "Search across every briefing, plus the Players roster and Dictionary. Stories you save (★ in the reader) collect here.";
+      root.appendChild(p);
+      return;
+    }
+    root.appendChild(sectionHead("Saved"));
+    const list = document.createElement("div");
+    list.className = "story-group";
+    for (const s of saved) {
+      const sub = [formatDate(s.date, { month: "short", day: "numeric", year: "numeric" }), s.section || s.market].filter(Boolean).join(" · ");
+      list.appendChild(searchStoryRow(s.date, s.id, s.title, sub));
+    }
+    root.appendChild(list);
+    return;
+  }
+
+  const storyHits = [];
+  for (const day of days) {
+    for (const s of day.stories || []) {
+      const blob = [s.title, s.summary, s.section, s.market, s.dealType, s.assetClass, s.publisher, (s.sources || []).join(" ")]
+        .filter(Boolean).join(" ").toLowerCase();
+      if (blob.includes(q)) storyHits.push({ date: day.date, s });
+    }
+  }
+  storyHits.sort((a, b) => b.date.localeCompare(a.date));
+  const playerHits = [...players.values()].filter((p) =>
+    [p.name, p.role, p.org, p.tagline, ...(p.markets || []), ...(p.assetClasses || [])].filter(Boolean).join(" ").toLowerCase().includes(q));
+  const termHits = [...terms.values()].filter((t) =>
+    [t.term, t.category, t.shortDef, ...(t.aliases || [])].filter(Boolean).join(" ").toLowerCase().includes(q));
+
+  if (!storyHits.length && !playerHits.length && !termHits.length) {
+    const p = document.createElement("p");
+    p.className = "search-hint";
+    p.textContent = "No matches.";
+    root.appendChild(p);
+    return;
+  }
+
+  if (storyHits.length) {
+    root.appendChild(sectionHead(`Stories · ${storyHits.length}`));
+    const list = document.createElement("div");
+    list.className = "story-group";
+    for (const { date, s } of storyHits.slice(0, 80)) {
+      const sub = [formatDate(date, { month: "short", day: "numeric" }), s.market, fmtValue(s.valueUsd)].filter(Boolean).join(" · ");
+      list.appendChild(searchStoryRow(date, s.id, s.title, sub));
+    }
+    root.appendChild(list);
+  }
+  if (playerHits.length) {
+    root.appendChild(sectionHead(`Players · ${playerHits.length}`));
+    const grid = document.createElement("div");
+    grid.className = "player-grid";
+    for (const p of playerHits.slice(0, 12)) grid.appendChild(playerCard(p));
+    root.appendChild(grid);
+  }
+  if (termHits.length) {
+    root.appendChild(sectionHead(`Dictionary · ${termHits.length}`));
+    const grid = document.createElement("div");
+    grid.className = "player-grid";
+    for (const t of termHits.slice(0, 12)) grid.appendChild(termCard(t));
+    root.appendChild(grid);
+  }
+}
+
+/* ---------- trends ---------- */
+
+function tallyBy(stories, key) {
+  const m = new Map();
+  for (const s of stories) {
+    const v = s[key];
+    if (!v) continue;
+    const cur = m.get(v) || { name: v, count: 0, volume: 0 };
+    cur.count++;
+    cur.volume += s.valueUsd || 0;
+    m.set(v, cur);
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count || b.volume - a.volume);
+}
+
+function hbarChart(items) {
+  const max = Math.max(1, ...items.map((i) => i.value));
+  const box = document.createElement("div");
+  box.className = "hbars";
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "hbar-row";
+    const label = document.createElement("div");
+    label.className = "hbar-label";
+    label.textContent = it.label;
+    const track = document.createElement("div");
+    track.className = "hbar-track";
+    const fill = document.createElement("div");
+    fill.className = "hbar-fill";
+    fill.style.width = Math.max(3, (it.value / max) * 100) + "%";
+    if (it.color) fill.style.background = it.color;
+    track.appendChild(fill);
+    const val = document.createElement("div");
+    val.className = "hbar-val";
+    val.textContent = it.sub;
+    row.append(label, track, val);
+    box.appendChild(row);
+  }
+  return box;
+}
+
+async function renderTrends() {
+  const wrap = $("trends-content");
+  wrap.innerHTML = "";
+  const days = await getAllDays();
+  const stories = days.flatMap((d) => d.stories || []);
+
+  if (!stories.length) {
+    const p = document.createElement("p");
+    p.style.cssText = "font-style:italic;color:var(--ink-2);padding:40px 0;text-align:center";
+    p.textContent = "Trends build as briefings accumulate.";
+    wrap.appendChild(p);
+    return;
+  }
+
+  const totalVol = stories.reduce((s, x) => s + (x.valueUsd || 0), 0);
+  const byMarket = tallyBy(stories, "market");
+  const byType = tallyBy(stories, "dealType");
+  const byAsset = tallyBy(stories, "assetClass");
+
+  const tiles = document.createElement("div");
+  tiles.className = "rate-tiles quads";
+  for (const [l, v] of [["Stories", String(stories.length)], ["Tracked volume", fmtValue(totalVol) || "—"], ["Days", String(days.length)], ["Markets", String(byMarket.length)]]) {
+    const t = document.createElement("div");
+    t.className = "rate-tile";
+    const a = document.createElement("div"); a.className = "rt-label"; a.textContent = l;
+    const b = document.createElement("div"); b.className = "rt-value"; b.textContent = v;
+    t.append(a, b);
+    tiles.appendChild(t);
+  }
+  wrap.appendChild(tiles);
+  const note = document.createElement("p");
+  note.className = "trends-note";
+  note.textContent = "Across every briefing on record. Tracked volume sums each story's single deal size.";
+  wrap.appendChild(note);
+
+  const byDay = days.slice().sort((a, b) => a.date.localeCompare(b.date)).map((d) => {
+    const list = d.stories || [];
+    return { date: d.date, count: list.length, volume: list.reduce((s, x) => s + (x.valueUsd || 0), 0) };
+  });
+  if (byDay.length > 1) {
+    wrap.appendChild(sectionHead("Deal volume by day"));
+    wrap.appendChild(hbarChart(byDay.map((d) => ({
+      label: formatDate(d.date, { month: "short", day: "numeric" }),
+      value: d.volume,
+      sub: (fmtValue(d.volume) || "—") + " · " + d.count,
+    }))));
+  }
+
+  wrap.appendChild(sectionHead("Most active markets"));
+  wrap.appendChild(hbarChart(byMarket.slice(0, 8).map((m) => ({
+    label: m.name, value: m.count, sub: m.count + (m.volume ? " · " + fmtValue(m.volume) : ""),
+  }))));
+
+  wrap.appendChild(sectionHead("Deal types"));
+  wrap.appendChild(hbarChart(byType.map((t) => ({
+    label: typeInfo(t.name).emoji + " " + t.name, value: t.count, sub: String(t.count), color: typeInfo(t.name).color,
+  }))));
+
+  if (byAsset.length) {
+    wrap.appendChild(sectionHead("Asset classes"));
+    wrap.appendChild(hbarChart(byAsset.slice(0, 8).map((a) => ({
+      label: a.name, value: a.count, sub: a.count + (a.volume ? " · " + fmtValue(a.volume) : ""),
+    }))));
   }
 }
 
@@ -2261,6 +2542,18 @@ async function openReaderRoute(date, id) {
 
   $("reader-original").href = story.url || "#";
   $("reader-original-end").href = story.url || "#";
+
+  // save (bookmark) toggle for this story
+  state.reader = { story, date };
+  const saveBtn = $("reader-save");
+  const paintSave = () => {
+    const on = isSaved(date, story.id);
+    saveBtn.textContent = on ? "★" : "☆";
+    saveBtn.classList.toggle("on", on);
+    saveBtn.setAttribute("aria-label", on ? "Saved — tap to remove" : "Save story");
+  };
+  paintSave();
+  saveBtn.onclick = () => { const now = toggleSaved(story, date); paintSave(); flashToast(now ? "Saved" : "Removed"); };
 
   const reader = $("reader");
   reader.hidden = false;

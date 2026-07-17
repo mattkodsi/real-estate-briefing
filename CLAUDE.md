@@ -40,6 +40,7 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
    - `assetClass` — `Multifamily`, `Office`, `Retail`, `Industrial`, `Hotel`, `Residential` (single-family/condo/luxury homes), `Mixed-Use`, `Land`, or `null` when not asset-specific.
    - `market` — short reusable metro/region label. Reuse existing ones before inventing: New York, Los Angeles, SF Bay Area, South Florida, Texas, DFW, Chicago, Washington DC, Boston, New Jersey, Phoenix, Atlanta, Denver, Austin, San Diego, National.
    - `valueUsd` — the single deal size in dollars as a plain number (e.g. 81400000); `null` when there is no single figure (permit recaps, roundups, policy pieces).
+   - `sizeSqft` / `units` — the deal's size when a single clear figure is stated: square footage (office / retail / industrial / mixed-use) or unit count (multifamily / residential apartments). Plain numbers; omit either when not stated. The app derives a `$/sf` or `$/unit` chip from these plus `valueUsd` (it prefers `$/unit` when `units` is present).
 5. **Geocode**: for stories tied to identifiable places (a property, site, submarket, or city), add `locations: [{label, lat, lng}]` — approximate coordinates from knowledge are fine (city/neighborhood precision; a specific address if confident). Stories with no meaningful geography (national policy, earnings) get `locations: []`.
 6. **Reader content** per story, in order of preference: (a) full story text extracted from the email body itself when the newsletter carries it (CRE Daily often does) — include `<figure>/<img>/<figcaption>`; (b) `python3 scripts/fetch_article.py <url>` → JSON `{ok, title, image, html, words}`; if `ok`, use `html` as `content` and `image` as hero; (c) neither → `content: null` for now — step 7b's `fill_content.py` will loop back and fetch it deterministically, so you don't have to fetch every story inline here; you just have to run that step.
    - **Credit the real publisher.** When a newsletter item is a pointer to another outlet's article (CRE Daily roundups constantly do this — the blurb says "per CommercialSearch", "via Multi-Housing News", "The Wall Street Journal reports"), set the story's `publisher` to that outlet's name. The app credits `publisher` first, then the resolved article-URL domain, then the newsletter — so a reroute is attributed correctly even when its link is a `beehiiv`/Mailchimp wrapper that couldn't be resolved. Leave `publisher` unset when the newsletter is itself the publisher (its own credaily.com/therealdeal.com/inman.com article).
@@ -105,6 +106,8 @@ The test: *would the user, opening the app, see something new?* If no, finish si
       "assetClass": "Multifamily | Office | Retail | Industrial | Hotel | Residential | Mixed-Use | Land | null",
       "market": "short metro/region label (see procedure step 5)",
       "valueUsd": 81400000,
+      "sizeSqft": 250000,
+      "units": 120,
       "featured": true,
       "url": "canonical article URL",
       "publisher": "real publisher's display name when the item points to ANOTHER outlet (common in CRE Daily roundups, which credit e.g. CommercialSearch, Multi-Housing News, The Wall Street Journal) — read it from the blurb's attribution so the app credits the true source, not the newsletter; omit when the newsletter itself is the publisher",
