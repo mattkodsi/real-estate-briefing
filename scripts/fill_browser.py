@@ -87,6 +87,7 @@ def main() -> int:
         source = "Supabase"
     if day is None:
         print(f"No day found for {date}.")
+        fill_content.record_heartbeat(date, 0, 0, "")
         return 0  # nothing to do is a clean outcome for a heartbeat
 
     stories = day.get("stories") or []
@@ -96,6 +97,7 @@ def main() -> int:
     print(f"{date} ({source}): {len(stories)} stories, {len(targets)} need content")
     if not targets:
         print("SUMMARY: nothing to fill")
+        fill_content.record_heartbeat(date, 0, 0, "")
         return 0
 
     from playwright.sync_api import sync_playwright  # imported late: no-op runs skip it
@@ -149,6 +151,8 @@ def main() -> int:
                 print("  published updated day to Supabase")
             except Exception as e:  # noqa: BLE001
                 print(f"  WARN push failed: {e}")
+
+    fill_content.record_heartbeat(date, len(filled), len(failed), "")
 
     parts = [f"filled {len(filled)}/{len(targets)}"]
     if failed:

@@ -80,6 +80,39 @@ def _today() -> str:
     return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
 
+def record_heartbeat(date: str, filled: int, failed: int, via: str) -> None:
+    """Pulse for the failover chain: every filler run (even a no-op) upserts a
+    status row so the cloud routine and the Mac watchdog can detect a dead
+    primary (GitHub Actions) and take over. Never fatal."""
+    import os
+    row = {"id": "fill_heartbeat", "data": {
+        "lastRun": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "date": date, "filled": filled, "failed": failed,
+        "via": via or ("github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "local"),
+    }}
+    try:
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/secrets", data=json.dumps(row).encode(),
+            headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}",
+                     "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+            method="POST")
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception:
+        pass  # a failed pulse must never break a fill run
+
+
+def read_heartbeat() -> dict | None:
+    """The last pulse, or None. Used by fallbacks to decide whether to act."""
+    try:
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/secrets?id=eq.fill_heartbeat&select=data",
+            headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}"})
+        rows = json.load(urllib.request.urlopen(req, timeout=15))
+        return rows[0]["data"] if rows else None
+    except Exception:
+        return None
+
+
 def _load_local(date: str) -> tuple[dict | None, pathlib.Path]:
     path = DATA / f"{date}.json"
     if path.exists():
@@ -235,6 +268,8 @@ def main() -> int:
             print("  published updated day to Supabase")
         except Exception as e:  # noqa: BLE001
             print(f"  WARN push failed: {e}")
+
+    record_heartbeat(date, len(rep["filled"]), len(rep["failed"]) + len(rep["blocked"]), "")
 
     # summary line the routine can read at a glance
     parts = [f"filled {len(rep['filled'])}/{rep['attempted']}"]
