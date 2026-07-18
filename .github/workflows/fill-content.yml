@@ -1,0 +1,47 @@
+# Content heartbeat: a real headless browser (Playwright) fills any story still
+# missing article text, every 30 minutes on GitHub's runners. This is the
+# backbone content-filler — it runs with unrestricted egress (unlike the cloud
+# routine's sandbox) and executes JavaScript (so Cloudflare challenges pass).
+# Idempotent: runs where nothing is missing exit in seconds without a browser.
+name: Fill article content
+
+on:
+  schedule:
+    # every 30 min, 6:00 AM – 9:30 PM ET (EDT = UTC-4) — spans all briefing windows
+    - cron: "*/30 10-23 * * *"
+    - cron: "*/30 0-1 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Day to fill (YYYY-MM-DD, default: today ET)"
+        required: false
+
+concurrency:
+  group: fill-content
+  cancel-in-progress: false
+
+jobs:
+  fill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: pip install playwright==1.49.1
+
+      - name: Cache Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-1.49.1
+
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Fill missing content
+        run: python scripts/fill_browser.py ${{ github.event.inputs.date }}

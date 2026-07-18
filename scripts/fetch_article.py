@@ -64,9 +64,10 @@ class ArticleExtractor(HTMLParser):
     a stray unclosed <div> can never leave us stuck in skip mode the way a
     plain increment/decrement counter could."""
 
-    def __init__(self, scope_to_article: bool):
+    def __init__(self, scope_to_article: bool, junk_classes: bool = True):
         super().__init__(convert_charrefs=True)
         self.scope_to_article = scope_to_article
+        self.junk_classes = junk_classes  # False: drop by tag only (relaxed pass)
         self.in_article = 0 if scope_to_article else 1
         self.depth = 0            # nesting depth of open non-void elements
         self.drop_depth = None    # depth at which the current skipped subtree began
@@ -98,7 +99,8 @@ class ArticleExtractor(HTMLParser):
             if not (m and int(m.group(1)) < 400) and src.startswith("http"):
                 alt = (a.get("alt") or "").replace('"', "&quot;")
                 self.out.append(f'<img src="{src}" alt="{alt}">')
-        elif emit and (tag in DROP_SUBTREES or JUNK.search(a.get("class", "") + " " + a.get("id", ""))):
+        elif emit and (tag in DROP_SUBTREES or
+                       (self.junk_classes and JUNK.search(a.get("class", "") + " " + a.get("id", "")))):
             self.drop_depth = self.depth  # begin skipping this subtree
         elif emit and tag in KEEP:
             self.open_keep.append(tag)
@@ -216,20 +218,33 @@ def _get_html(url: str) -> tuple[str, str]:
     return _fetch_via_proxy(url)
 
 
-def extract(url: str) -> dict:
-    is_trd = "therealdeal.com" in urllib.parse.urlparse(url).netloc
-    html, final_url = _get_html(url)
+def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict:
+    """Extract reader content from already-fetched page HTML. Shared by the
+    HTTP path (extract below) and the headless-browser filler
+    (scripts/fill_browser.py), so both produce identical output."""
+    is_trd = "therealdeal.com" in urllib.parse.urlparse(final_url or url).netloc
+    final_url = final_url or url
     blocked = _looks_blocked(html)
-
     has_article_tag = "<article" in html
-    p = ArticleExtractor(scope_to_article=has_article_tag)
-    p.feed(html)
-    body = "".join(p.out)
-    # tidy: drop empty paragraphs, collapse whitespace
-    body = re.sub(r"<(p|h2|h3|li|blockquote)>\s*</\1>", "", body)
-    body = re.sub(r"[ \t]+", " ", body)
-    body = _strip_nav_clutter(body)  # drop newsletter/nav headings around the real body
-    words = len(re.sub(r"<[^>]+>", " ", body).split())
+
+    def run(junk_classes: bool):
+        p = ArticleExtractor(scope_to_article=has_article_tag, junk_classes=junk_classes)
+        p.feed(html)
+        body = "".join(p.out)
+        # tidy: drop empty paragraphs, collapse whitespace
+        body = re.sub(r"<(p|h2|h3|li|blockquote)>\s*</\1>", "", body)
+        body = re.sub(r"[ \t]+", " ", body)
+        body = _strip_nav_clutter(body)  # drop newsletter/nav headings around the real body
+        return p, body, len(re.sub(r"<[^>]+>", " ", body).split())
+
+    # strict pass first; when a page-builder wraps the whole body in a class the
+    # junk filter matches (0 words despite a real article), retry dropping by
+    # tag only — _strip_nav_clutter still trims the edges
+    p, body, words = run(True)
+    if words < 120:
+        p2, body2, words2 = run(False)
+        if words2 >= 120:
+            p, body, words = p2, body2, words2
     out = {
         "ok": words > 120,
         "title": p.title,
@@ -247,6 +262,11 @@ def extract(url: str) -> dict:
     if not out["ok"] and blocked:
         out["blocked"] = True
     return out
+
+
+def extract(url: str) -> dict:
+    html, final_url = _get_html(url)
+    return extract_from_html(html, url, final_url)
 
 
 if __name__ == "__main__":
