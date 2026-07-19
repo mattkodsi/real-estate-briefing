@@ -108,29 +108,6 @@ async function init() {
   $("prev-day").addEventListener("click", () => stepDay(-1));
   $("next-day").addEventListener("click", () => stepDay(1));
 
-  // hold the wordmark for 3s to re-lock the app; a normal click still goes home
-  const wordmark = document.querySelector(".wordmark");
-  if (wordmark) {
-    let holdTimer, relocking = false;
-    const startHold = () => {
-      relocking = false;
-      wordmark.classList.add("holding");
-      holdTimer = setTimeout(() => {
-        relocking = true;
-        wordmark.classList.remove("holding");
-        try { localStorage.removeItem(UNLOCK_KEY); } catch { /* ignore */ }
-        location.reload(); // gate() re-runs → lock screen returns
-      }, 1000);
-    };
-    const cancelHold = () => { clearTimeout(holdTimer); wordmark.classList.remove("holding"); };
-    wordmark.addEventListener("pointerdown", startHold);
-    wordmark.addEventListener("pointerup", cancelHold);
-    wordmark.addEventListener("pointerleave", cancelHold);
-    wordmark.addEventListener("pointercancel", cancelHold);
-    // suppress the navigate-home click that would otherwise fire after a long-press
-    wordmark.addEventListener("click", (e) => { if (relocking) { e.preventDefault(); relocking = false; } });
-  }
-
   // manual refresh — one clean 360° per tap (re-armed each click), toast on result.
   // Class removed on a timer matched to the CSS duration (animationend doesn't
   // fire reliably on inline SVG in every engine), so the stop is deterministic.
@@ -146,7 +123,13 @@ async function init() {
   });
 
   $("search-btn").addEventListener("click", () => { location.hash = "/search"; });
-  $("profile-btn").addEventListener("click", () => showProfilePicker(false));
+  // the monogram locks the app back to the picker; re-entering any
+  // passcoded profile (including your own) asks for its code
+  $("profile-btn").addEventListener("click", () => {
+    setLocked();
+    try { sessionStorage.removeItem(GUEST_KEY); } catch { /* ignore */ }
+    showProfilePicker(false);
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshData(true);
@@ -2834,6 +2817,7 @@ function closeReaderNav() {
 
 const PROFILE_KEY = "briefing_profile_v1";     // this device's reader (slug)
 const GUEST_KEY = "briefing_guest_v1";         // sessionStorage: guest for this visit only
+const LOCKED_KEY = "briefing_locked_v1";       // set by the masthead monogram; forces the picker
 const LEGACY_SAVED_KEY = "briefing_saved_v1";  // pre-profiles bookmarks, migrated on first pick
 
 const FOUNDERS = [
@@ -2859,13 +2843,14 @@ async function fetchProfileRows() {
 
 /* The picker's roster: named rows from Supabase layered over the founding four. */
 function profileRoster(rows) {
-  const bySlug = new Map(FOUNDERS.map((f) => [f.slug, { ...f }]));
+  const bySlug = new Map(FOUNDERS.map((f) => [f.slug, { ...f, pinHash: null }]));
   for (const r of rows) {
     const meta = r.data || {};
     bySlug.set(r.profile, {
       slug: r.profile,
       name: meta.name || r.profile,
       color: meta.color || PROFILE_COLORS[bySlug.size % PROFILE_COLORS.length],
+      pinHash: meta.pinHash || null,
     });
   }
   return [...bySlug.values()];
@@ -2892,6 +2877,12 @@ async function activateProfile(slug, meta) {
   if (!data.color) data.color = meta?.color || PROFILE_COLORS[0];
 
   Object.assign(profile, { slug, name: data.name, color: data.color, guest: false, data, dirty: new Set() });
+
+  // a passcode chosen at create time rides in on meta and syncs with the row
+  if (meta?.pinHash && !data.pinHash) {
+    data.pinHash = meta.pinHash;
+    profile.dirty.add("pinHash");
+  }
 
   // one-time migration: bookmarks saved before profiles existed join this reader
   try {
@@ -2989,9 +2980,128 @@ function slugifyName(name) {
   return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
-/* The picker. gate=true on first launch (no way back); gate=false when
-   switching readers from the masthead avatar (cancellable, restarts clean). */
-async function showProfilePicker(gate) {
+function pinHashOf(slug, pin) { return sha256Hex(`${slug}:${pin}`); }
+
+function isLocked() {
+  try { return localStorage.getItem(LOCKED_KEY) === "1"; } catch { return false; }
+}
+function setLocked() { try { localStorage.setItem(LOCKED_KEY, "1"); } catch { /* ignore */ } }
+function clearLocked() { try { localStorage.removeItem(LOCKED_KEY); } catch { /* ignore */ } }
+
+/* Upsert a profile's identity (name / color / passcode) without touching its
+   other keys. Used by the picker's Edit flow. */
+async function saveProfileMeta(slug, meta) {
+  let remote = {};
+  try {
+    const rows = await sb(`prefs?profile=eq.${encodeURIComponent(slug)}&select=data`);
+    remote = rows[0]?.data || {};
+  } catch { /* offline: push what we know */ }
+  const merged = { ...remote, name: meta.name, color: meta.color };
+  if (meta.pinHash) merged.pinHash = meta.pinHash;
+  else delete merged.pinHash;
+  if (!merged.createdAt) merged.createdAt = new Date().toISOString().slice(0, 10);
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/prefs`, {
+    method: "POST",
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
+               "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+    body: JSON.stringify({ profile: slug, data: merged, updated_at: new Date().toISOString() }),
+  });
+  if (!res.ok) throw new Error(`prefs ${res.status}`);
+  try { localStorage.setItem(profileCacheKey(slug), JSON.stringify(merged)); } catch { /* ignore */ }
+  if (profile.slug === slug && !profile.guest) {
+    profile.name = merged.name;
+    profile.color = merged.color;
+    Object.assign(profile.data, { name: merged.name, color: merged.color });
+    if (merged.pinHash) profile.data.pinHash = merged.pinHash;
+    else delete profile.data.pinHash;
+    paintAvatar();
+  }
+}
+
+/* The keypad — same design language as the old app lock, rendered into `host`.
+   onEntry(pin, pad) fires at 4 digits; call pad.fail(msg) to shake and retry. */
+function pinPad(host, subtitle, onEntry) {
+  const wrap = document.createElement("div");
+  wrap.className = "profile-pin";
+  const prompt = document.createElement("p");
+  prompt.className = "lock-prompt";
+  prompt.textContent = subtitle;
+  const dots = document.createElement("div");
+  dots.className = "lock-dots";
+  for (let i = 0; i < 4; i++) dots.appendChild(document.createElement("span"));
+  const keys = document.createElement("div");
+  keys.className = "lock-keys";
+  for (const k of ["1", "2", "3", "4", "5", "6", "7", "8", "9", null, "0", "del"]) {
+    if (k === null) { keys.appendChild(document.createElement("span")); continue; }
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.k = k;
+    if (k === "del") { b.className = "lock-del"; b.setAttribute("aria-label", "Delete"); b.textContent = "⌫"; }
+    else b.textContent = k;
+    keys.appendChild(b);
+  }
+  wrap.append(prompt, dots, keys);
+  host.appendChild(wrap);
+
+  let entry = "", busy = false;
+  const paint = () => [...dots.children].forEach((d, i) => d.classList.toggle("on", i < entry.length));
+  const pad = {
+    fail(msg) {
+      prompt.textContent = msg;
+      prompt.classList.add("err");
+      dots.classList.add("shake");
+      setTimeout(() => { dots.classList.remove("shake"); entry = ""; paint(); busy = false; }, 460);
+    },
+  };
+  keys.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn || busy) return;
+    const k = btn.dataset.k;
+    if (k === "del") entry = entry.slice(0, -1);
+    else if (entry.length < 4) {
+      if (prompt.classList.contains("err")) { prompt.textContent = subtitle; prompt.classList.remove("err"); }
+      entry += k;
+    }
+    paint();
+    if (entry.length === 4) { busy = true; await onEntry(entry, pad); }
+  });
+  return pad;
+}
+
+/* Choose-and-confirm flow for setting a new passcode. */
+function setPinFlow(host, slug, onSet, onCancel) {
+  const cancelLink = () => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "profiles-cancel";
+    b.textContent = "Cancel";
+    b.addEventListener("click", onCancel);
+    host.appendChild(b);
+  };
+  const run = () => {
+    host.innerHTML = "";
+    pinPad(host, "Choose a passcode", (first) => {
+      host.innerHTML = "";
+      pinPad(host, "Type it again", async (second, pad) => {
+        if (first !== second) {
+          pad.fail("Doesn't match");
+          setTimeout(run, 700);
+          return;
+        }
+        onSet(await pinHashOf(slug, second), second);
+      });
+      cancelLink();
+    });
+    cancelLink();
+  };
+  run();
+}
+
+/* The picker IS the lock. coldBoot=true on first load (init() runs after a
+   profile is entered); coldBoot=false when the masthead monogram re-locks over
+   the live app (re-entering the same reader resumes without a rebuild).
+   Entering any profile that carries a passcode requires it; Guest never does. */
+async function showProfilePicker(coldBoot) {
   const overlay = $("profiles");
   overlay.innerHTML = "";
   overlay.hidden = false;
@@ -3008,12 +3118,11 @@ async function showProfilePicker(gate) {
 
   const title = document.createElement("h2");
   title.className = "profiles-title";
-  title.textContent = gate ? "Who's reading?" : "Switch reader";
   inner.appendChild(title);
 
-  const grid = document.createElement("div");
-  grid.className = "profiles-grid";
-  inner.appendChild(grid);
+  const stage = document.createElement("div");
+  stage.className = "profiles-stage";
+  inner.appendChild(stage);
 
   const closePicker = () => {
     overlay.classList.add("leaving");
@@ -3024,33 +3133,51 @@ async function showProfilePicker(gate) {
     }, 380);
   };
 
-  const finish = async (slug, meta) => {
-    if (!gate) {
-      if (slug === profile.slug) { closePicker(); return; }
-      // switching readers: make sure the row exists (with its proper name and
-      // color) BEFORE restarting, so the reboot finds the right identity
-      if (slug === "guest") {
-        try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
-      } else {
-        await activateProfile(slug, meta);
-        await flushPrefs();
-      }
-      location.reload();
+  let roster = profileRoster(await fetchProfileRows());
+
+  const proceed = async (p) => {
+    clearLocked();
+    if (p.slug === "guest") {
+      try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
+      if (coldBoot) { await activateProfile("guest"); closePicker(); init(); }
+      else if (profile.slug === "guest") closePicker();
+      else location.reload();
       return;
     }
-    await activateProfile(slug, meta);
-    closePicker();
-    init();
-    if (!profile.guest) flashToast(timeGreeting(profile.name));
+    if (coldBoot) {
+      await activateProfile(p.slug, p);
+      closePicker();
+      init();
+      flashToast(timeGreeting(profile.name));
+    } else if (p.slug === profile.slug) {
+      closePicker(); // same reader resuming: keep the live app as-is
+    } else {
+      await activateProfile(p.slug, p);
+      await flushPrefs();
+      location.reload();
+    }
   };
 
-  const pick = (card, slug, meta) => {
-    grid.classList.add("chosen");
-    card.classList.add("picked");
-    setTimeout(() => finish(slug, meta), 420);
+  const backLink = (label, fn) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "profiles-cancel";
+    b.textContent = label;
+    b.addEventListener("click", fn);
+    stage.appendChild(b);
   };
 
-  const card = (p, i) => {
+  const showPinFor = (p, subtitle, onOk, backMode) => {
+    title.textContent = p.name;
+    stage.innerHTML = "";
+    pinPad(stage, subtitle, async (pin, pad) => {
+      if ((await pinHashOf(p.slug, pin)) === p.pinHash) onOk();
+      else pad.fail("Wrong passcode");
+    });
+    backLink("‹ All readers", () => renderGrid(backMode));
+  };
+
+  const card = (p, i, mode) => {
     const el = document.createElement("button");
     el.type = "button";
     el.className = "profile-card";
@@ -3060,221 +3187,279 @@ async function showProfilePicker(gate) {
     disc.style.background = `linear-gradient(160deg, ${p.color} 0%, ${p.color} 55%, rgba(0,0,0,0.28) 160%)`;
     disc.textContent = p.name.trim().charAt(0).toUpperCase();
     el.appendChild(disc);
+    if (mode === "edit") {
+      const badge = document.createElement("span");
+      badge.className = "profile-edit-badge";
+      badge.textContent = "✎";
+      el.appendChild(badge);
+    }
     const nm = document.createElement("span");
     nm.className = "profile-name";
     nm.textContent = p.name;
     el.appendChild(nm);
-    if (!gate && p.slug === profile.slug) {
+    if (mode === "pick" && !coldBoot && p.slug === profile.slug) {
       el.classList.add("current");
       const now = document.createElement("span");
       now.className = "profile-now";
       now.textContent = "reading now";
       el.appendChild(now);
     }
-    el.addEventListener("click", () => pick(el, p.slug, p));
+    el.addEventListener("click", () => {
+      if (mode === "edit") {
+        if (p.pinHash) showPinFor(p, "Enter current passcode", () => renderEditForm(p, null), "edit");
+        else renderEditForm(p, null);
+        return;
+      }
+      if (p.pinHash) {
+        showPinFor(p, "Enter passcode", () => proceed(p), "pick");
+      } else {
+        const grid = el.closest(".profiles-grid");
+        grid.classList.add("chosen");
+        el.classList.add("picked");
+        setTimeout(() => proceed(p), 420);
+      }
+    });
     return el;
   };
 
-  const roster = profileRoster(await fetchProfileRows());
-  let i = 0;
-  for (const p of roster) grid.appendChild(card(p, i++));
+  const renderGrid = (mode) => {
+    title.textContent = mode === "edit" ? "Edit readers" : "Who's reading?";
+    stage.innerHTML = "";
+    const grid = document.createElement("div");
+    grid.className = "profiles-grid";
+    stage.appendChild(grid);
+    let i = 0;
+    for (const p of roster) grid.appendChild(card(p, i++, mode));
 
-  // + new reader
-  const add = document.createElement("button");
-  add.type = "button";
-  add.className = "profile-card";
-  add.style.animationDelay = `${60 + i++ * 55}ms`;
-  add.innerHTML = `<span class="profile-disc new">+</span><span class="profile-name">New</span>`;
-  add.addEventListener("click", () => {
-    const used = new Set(roster.map((r) => r.color));
-    const freshColor = PROFILE_COLORS.find((c) => !used.has(c)) || PROFILE_COLORS[roster.length % PROFILE_COLORS.length];
-    renderCreateForm(inner, grid, freshColor, (slug, meta) => finish(slug, meta), roster);
-  });
-  grid.appendChild(add);
+    if (mode === "pick") {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "profile-card";
+      add.style.animationDelay = `${60 + i++ * 55}ms`;
+      add.innerHTML = `<span class="profile-disc new">+</span><span class="profile-name">New</span>`;
+      add.addEventListener("click", () => renderCreate(null));
+      grid.appendChild(add);
 
-  // guest — nothing saves, for showing the app around
-  const guest = document.createElement("button");
-  guest.type = "button";
-  guest.className = "profiles-guest";
-  guest.innerHTML = `Browse as guest<span>nothing is saved</span>`;
-  guest.addEventListener("click", () => finish("guest"));
-  inner.appendChild(guest);
+      const guest = document.createElement("button");
+      guest.type = "button";
+      guest.className = "profiles-guest";
+      guest.innerHTML = `Browse as guest<span>nothing is saved</span>`;
+      guest.addEventListener("click", () => proceed({ slug: "guest" }));
+      stage.appendChild(guest);
 
-  if (!gate) {
-    const cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "profiles-cancel";
-    cancel.textContent = "Back to the briefing";
-    cancel.addEventListener("click", closePicker);
-    inner.appendChild(cancel);
-  }
-}
-
-function renderCreateForm(inner, grid, freshColor, done, roster) {
-  grid.hidden = true;
-  const guestBtn = inner.querySelector(".profiles-guest");
-  if (guestBtn) guestBtn.hidden = true;
-  const title = inner.querySelector(".profiles-title");
-  if (title) title.textContent = "New reader";
-
-  const form = document.createElement("div");
-  form.className = "profile-create";
-
-  const preview = document.createElement("span");
-  preview.className = "profile-disc preview";
-  preview.textContent = "?";
-  let color = freshColor;
-  const paintPreview = (name) => {
-    preview.style.background = `linear-gradient(160deg, ${color} 0%, ${color} 55%, rgba(0,0,0,0.28) 160%)`;
-    preview.textContent = (name || "?").trim().charAt(0).toUpperCase() || "?";
+      backLink("Edit readers", () => renderGrid("edit"));
+    } else {
+      backLink("Done", () => renderGrid("pick"));
+    }
   };
-  paintPreview("");
-  form.appendChild(preview);
 
-  const input = document.createElement("input");
-  input.className = "profile-input";
-  input.type = "text";
-  input.maxLength = 24;
-  input.placeholder = "Your name";
-  input.autocapitalize = "words";
-  form.appendChild(input);
+  /* Edit a reader's name / color / passcode. `preserved` carries in-progress
+     field values across the set-passcode sub-flow. */
+  const renderEditForm = (p, preserved) => {
+    title.textContent = "Edit reader";
+    stage.innerHTML = "";
+    const form = document.createElement("div");
+    form.className = "profile-create";
+    stage.appendChild(form);
 
-  const swatches = document.createElement("div");
-  swatches.className = "profile-swatches";
-  for (const c of PROFILE_COLORS) {
-    const s = document.createElement("button");
-    s.type = "button";
-    s.className = "profile-swatch" + (c === color ? " on" : "");
-    s.style.background = c;
-    s.setAttribute("aria-label", "Pick color");
-    s.addEventListener("click", () => {
-      color = c;
-      swatches.querySelectorAll(".on").forEach((el) => el.classList.remove("on"));
-      s.classList.add("on");
-      paintPreview(input.value);
+    let color = preserved ? preserved.color : p.color;
+    let pendingPin = preserved ? preserved.pinHash : (p.pinHash || null);
+
+    const preview = document.createElement("span");
+    preview.className = "profile-disc preview";
+    const paintPreview = (name) => {
+      preview.style.background = `linear-gradient(160deg, ${color} 0%, ${color} 55%, rgba(0,0,0,0.28) 160%)`;
+      preview.textContent = (name || "?").trim().charAt(0).toUpperCase() || "?";
+    };
+    form.appendChild(preview);
+
+    const input = document.createElement("input");
+    input.className = "profile-input";
+    input.type = "text";
+    input.maxLength = 24;
+    input.value = preserved ? preserved.name : p.name;
+    input.autocapitalize = "words";
+    form.appendChild(input);
+    paintPreview(input.value);
+    input.addEventListener("input", () => paintPreview(input.value));
+
+    const swatches = document.createElement("div");
+    swatches.className = "profile-swatches";
+    for (const c of PROFILE_COLORS) {
+      const s = document.createElement("button");
+      s.type = "button";
+      s.className = "profile-swatch" + (c === color ? " on" : "");
+      s.style.background = c;
+      s.setAttribute("aria-label", "Pick color");
+      s.addEventListener("click", () => {
+        color = c;
+        swatches.querySelectorAll(".on").forEach((el) => el.classList.remove("on"));
+        s.classList.add("on");
+        paintPreview(input.value);
+      });
+      swatches.appendChild(s);
+    }
+    form.appendChild(swatches);
+
+    const pinRow = document.createElement("div");
+    pinRow.className = "profile-pinrow";
+    const status = document.createElement("span");
+    const setBtn = document.createElement("button");
+    setBtn.type = "button";
+    setBtn.className = "profile-chipbtn";
+    const offBtn = document.createElement("button");
+    offBtn.type = "button";
+    offBtn.className = "profile-chipbtn";
+    offBtn.textContent = "Remove";
+    const paintPin = () => {
+      status.textContent = pendingPin ? "Passcode on" : "No passcode";
+      setBtn.textContent = pendingPin ? "Change" : "Set passcode";
+      offBtn.hidden = !pendingPin;
+    };
+    paintPin();
+    const toPinFlow = () => {
+      const keep = { name: input.value, color, pinHash: pendingPin };
+      setPinFlow(stage, p.slug,
+        (hash) => { keep.pinHash = hash; renderEditForm(p, keep); },
+        () => renderEditForm(p, keep));
+      title.textContent = p.name;
+    };
+    setBtn.addEventListener("click", toPinFlow);
+    offBtn.addEventListener("click", () => { pendingPin = null; paintPin(); });
+    pinRow.append(status, setBtn, offBtn);
+    form.appendChild(pinRow);
+
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "profile-go";
+    go.textContent = "Save";
+    go.addEventListener("click", async () => {
+      const name = input.value.trim() || p.name;
+      go.textContent = "Saving…";
+      try {
+        await saveProfileMeta(p.slug, { name, color, pinHash: pendingPin });
+        roster = profileRoster(await fetchProfileRows());
+        renderGrid("edit");
+      } catch {
+        go.textContent = "Couldn't save — try again";
+      }
     });
-    swatches.appendChild(s);
-  }
-  form.appendChild(swatches);
+    form.appendChild(go);
 
-  const go = document.createElement("button");
-  go.type = "button";
-  go.className = "profile-go";
-  go.textContent = "Start reading";
-  form.appendChild(go);
-
-  inner.appendChild(form);
-  const cancel = inner.querySelector(".profiles-cancel");
-  if (cancel) inner.appendChild(cancel); // escape hatch reads best under the form
-  input.addEventListener("input", () => paintPreview(input.value));
-  input.focus();
-
-  const submit = () => {
-    const name = input.value.trim();
-    if (!name) { input.focus(); return; }
-    let slug = slugifyName(name) || "reader";
-    const taken = new Set(roster.map((r) => r.slug));
-    let n = 2;
-    while (taken.has(slug)) slug = `${slugifyName(name)}-${n++}`;
-    done(slug, { name, color });
+    backLink("‹ Readers", () => renderGrid("edit"));
   };
-  go.addEventListener("click", submit);
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+
+  /* New reader, with an optional passcode. */
+  const renderCreate = (preserved) => {
+    title.textContent = "New reader";
+    stage.innerHTML = "";
+    const form = document.createElement("div");
+    form.className = "profile-create";
+    stage.appendChild(form);
+
+    const used = new Set(roster.map((r) => r.color));
+    let color = preserved ? preserved.color
+      : (PROFILE_COLORS.find((c) => !used.has(c)) || PROFILE_COLORS[roster.length % PROFILE_COLORS.length]);
+    // the slug isn't final until submit, so hold the raw pin in memory (never
+    // stored) and hash it against the real slug at submit time
+    let pendingRaw = preserved ? preserved.rawPin : null;
+
+    const preview = document.createElement("span");
+    preview.className = "profile-disc preview";
+    const paintPreview = (name) => {
+      preview.style.background = `linear-gradient(160deg, ${color} 0%, ${color} 55%, rgba(0,0,0,0.28) 160%)`;
+      preview.textContent = (name || "?").trim().charAt(0).toUpperCase() || "?";
+    };
+    form.appendChild(preview);
+
+    const input = document.createElement("input");
+    input.className = "profile-input";
+    input.type = "text";
+    input.maxLength = 24;
+    input.placeholder = "Your name";
+    input.autocapitalize = "words";
+    if (preserved) input.value = preserved.name;
+    form.appendChild(input);
+    paintPreview(input.value);
+    input.addEventListener("input", () => paintPreview(input.value));
+
+    const swatches = document.createElement("div");
+    swatches.className = "profile-swatches";
+    for (const c of PROFILE_COLORS) {
+      const s = document.createElement("button");
+      s.type = "button";
+      s.className = "profile-swatch" + (c === color ? " on" : "");
+      s.style.background = c;
+      s.setAttribute("aria-label", "Pick color");
+      s.addEventListener("click", () => {
+        color = c;
+        swatches.querySelectorAll(".on").forEach((el) => el.classList.remove("on"));
+        s.classList.add("on");
+        paintPreview(input.value);
+      });
+      swatches.appendChild(s);
+    }
+    form.appendChild(swatches);
+
+    const pinRow = document.createElement("div");
+    pinRow.className = "profile-pinrow";
+    const status = document.createElement("span");
+    const setBtn = document.createElement("button");
+    setBtn.type = "button";
+    setBtn.className = "profile-chipbtn";
+    const paintPin = () => {
+      status.textContent = pendingRaw ? "Passcode on" : "No passcode";
+      setBtn.textContent = pendingRaw ? "Change" : "Add passcode";
+    };
+    paintPin();
+    setBtn.addEventListener("click", () => {
+      const keep = { name: input.value, color, rawPin: pendingRaw };
+      setPinFlow(stage, "new",
+        (hash, raw) => { keep.rawPin = raw; renderCreate(keep); },
+        () => renderCreate(keep));
+    });
+    pinRow.append(status, setBtn);
+    form.appendChild(pinRow);
+
+    const go = document.createElement("button");
+    go.type = "button";
+    go.className = "profile-go";
+    go.textContent = "Start reading";
+    form.appendChild(go);
+
+    backLink("‹ All readers", () => renderGrid("pick"));
+
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      let slug = slugifyName(name) || "reader";
+      const taken = new Set(roster.map((r) => r.slug));
+      let n = 2;
+      while (taken.has(slug)) slug = `${slugifyName(name)}-${n++}`;
+      const pinHash = pendingRaw ? await pinHashOf(slug, pendingRaw) : null;
+      proceed({ slug, name, color, pinHash });
+    };
+    go.addEventListener("click", submit);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  };
+
+  renderGrid("pick");
 }
 
-/* ---------- passcode lock ----------
-   Deterrence for a public URL, not real data security (the Supabase read key
-   ships in this file). A correct entry sets a localStorage flag so the device
-   is remembered and never asked again. The PIN is stored only as a SHA-256
-   hash so the digits aren't sitting in the source. */
-const PIN_HASH = "b6792dadca7cfa5b5aeb02b950f3e717bd3d985346a948ba506293e3fc31c235";
-const UNLOCK_KEY = "briefing_unlocked_v1";
+/* ---------- boot ---------- */
 
 async function sha256Hex(s) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-let zoomBlockCleanup = null;
-
+/* Remembered, unlocked devices go straight to their reader; everything else
+   (first visit, or a lock via the masthead monogram) goes through the picker,
+   where each profile's own passcode gates entry. */
 function bootApp() {
-  if (zoomBlockCleanup) { zoomBlockCleanup(); zoomBlockCleanup = null; }
-  // restore normal pinch-zoom for reading now that the lock is gone
-  const vp = document.querySelector('meta[name="viewport"]');
-  if (vp) vp.setAttribute("content", "width=device-width, initial-scale=1, viewport-fit=cover");
-  const lock = $("lock");
-  if (lock) lock.remove();
-  document.body.classList.add("unlocked");
-  // the reader gate: remembered profiles boot straight in; first visits pick
   const slug = rememberedProfile();
-  if (slug) activateProfile(slug).catch(() => {}).then(init);
+  if (slug && !isLocked()) activateProfile(slug).catch(() => {}).then(init);
   else showProfilePicker(true);
 }
 
-/* While the lock is up, block trackpad/mouse pinch-zoom (Ctrl/Cmd+wheel on
-   Chrome, gesture events on Safari). We deliberately do NOT block Ctrl/Cmd +/-/0
-   keyboard zoom, so the user can always reset with Cmd+0 and is never trapped.
-   Torn down on unlock so zoom works normally in the app. */
-function blockLockZoom() {
-  const onWheel = (e) => { if (e.ctrlKey || e.metaKey) e.preventDefault(); };
-  const onGesture = (e) => e.preventDefault();
-  window.addEventListener("wheel", onWheel, { passive: false });
-  window.addEventListener("gesturestart", onGesture, { passive: false });
-  window.addEventListener("gesturechange", onGesture, { passive: false });
-  zoomBlockCleanup = () => {
-    window.removeEventListener("wheel", onWheel);
-    window.removeEventListener("gesturestart", onGesture);
-    window.removeEventListener("gesturechange", onGesture);
-  };
-}
-
-function runLock() {
-  blockLockZoom();
-  const dots = $("lock-dots");
-  const prompt = $("lock-prompt");
-  const keys = $("lock-keys");
-  let entry = "";
-  let busy = false;
-
-  const paint = () => {
-    [...dots.children].forEach((d, i) => d.classList.toggle("on", i < entry.length));
-  };
-  const fail = () => {
-    prompt.textContent = "Incorrect passcode";
-    prompt.classList.add("err");
-    dots.classList.add("shake");
-    setTimeout(() => { dots.classList.remove("shake"); entry = ""; paint(); busy = false; }, 460);
-  };
-  const submit = async () => {
-    busy = true;
-    let ok = false;
-    try { ok = (await sha256Hex(entry)) === PIN_HASH; } catch { ok = false; }
-    if (ok) {
-      try { localStorage.setItem(UNLOCK_KEY, "1"); } catch { /* private mode: still unlock this session */ }
-      bootApp();
-    } else {
-      fail();
-    }
-  };
-
-  keys.addEventListener("click", (e) => {
-    const btn = e.target.closest("button");
-    if (!btn || busy) return;
-    const k = btn.dataset.k;
-    if (k === "del") {
-      entry = entry.slice(0, -1);
-    } else if (entry.length < 4) {
-      if (prompt.classList.contains("err")) { prompt.textContent = "Enter passcode"; prompt.classList.remove("err"); }
-      entry += k;
-    }
-    paint();
-    if (entry.length === 4) submit();
-  });
-}
-
-(function gate() {
-  let unlocked = false;
-  try { unlocked = localStorage.getItem(UNLOCK_KEY) === "1"; } catch { /* storage blocked */ }
-  if (unlocked) bootApp();
-  else runLock();
-})();
+bootApp();
