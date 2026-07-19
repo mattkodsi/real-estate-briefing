@@ -186,6 +186,31 @@ async function init() {
   $("reader-share").addEventListener("click", () => {
     if (state.reader) shareStoryCard(state.reader.story, state.reader.date);
   });
+  $("sharebox-close").addEventListener("click", hideShareBox);
+  $("sharebox").addEventListener("click", (e) => { if (e.target === $("sharebox")) hideShareBox(); });
+  // fresh tap = fresh user activation, so these calls are allowed to run
+  $("sharebox-share").addEventListener("click", async () => {
+    if (!shareBoxState) return;
+    const file = new File([shareBoxState.blob], shareBoxState.filename, { type: "image/png" });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+    }
+    flashToast("Touch and hold the card instead");
+  });
+  $("sharebox-link").addEventListener("click", async () => {
+    if (!shareBoxState?.link) return;
+    try {
+      await navigator.clipboard.writeText(shareBoxState.link);
+      flashToast("Link copied");
+    } catch {
+      flashToast(shareBoxState.link); // worst case: show it to copy by hand
+    }
+  });
 
   // text size (persists per reader profile)
   $("reader-size").addEventListener("click", () => {
@@ -236,6 +261,7 @@ async function init() {
   document.addEventListener("keydown", (e) => {
     if (e.target.matches?.("input, textarea")) return;
     if (e.key === "Escape") {
+      if (!$("sharebox").hidden) { hideShareBox(); return; }
       if (!$("sheet").hidden) { closeSheet(); return; }
       if (!$("lightbox").hidden) { $("lightbox").hidden = true; return; }
       if (!$("reader").hidden) closeReaderNav();
@@ -4088,16 +4114,13 @@ function cardWrapText(x, text, maxWidth, maxLines) {
 }
 
 async function shareStoryCard(story, date) {
-  // iOS Messages drops the image if text shares the payload, so the link
-  // travels via the clipboard instead: copied now (inside the tap gesture),
-  // pasted by the sender right under the card. Query/tracking params stripped.
+  // the shortest honest form of the article link: origin + path, no tracking
   let link = null;
   if (story.url) {
     try {
       const u = new URL(story.url);
       link = u.origin + u.pathname;
     } catch { link = story.url; }
-    try { await navigator.clipboard.writeText(link); } catch { link = null; }
   }
 
   const W = 1080, H = 1350, P = 96;
@@ -4200,21 +4223,31 @@ async function shareStoryCard(story, date) {
 
   const blob = await new Promise((r) => c.toBlob(r, "image/png"));
   if (!blob) { flashToast("Couldn't render the card"); return; }
-  const file = new File([blob], `${story.id}.png`, { type: "image/png" });
-  try {
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      // files ONLY — iOS Messages drops the attachment if a title/text
-      // rides along with it (WebKit quirk)
-      await navigator.share({ files: [file] });
-      if (link) flashToast("Article link copied — paste it under the card");
-      return;
-    }
-  } catch (e) {
-    if (e && e.name === "AbortError") return; // user closed the share sheet
-  }
-  // desktop / unsupported: open the card in a tab to save manually
-  window.open(URL.createObjectURL(blob), "_blank", "noopener");
-  if (link) flashToast("Article link copied");
+  showShareBox(blob, `${story.id}.png`, link);
+}
+
+/* The card viewer. iOS standalone web apps can't reliably pass files through
+   the share sheet (the receiving app gets nothing — WebKit bug), so the card
+   lives here as a REAL image: touch-and-hold gives the native photo menu
+   (Share / Copy / Save), and each button runs in its own fresh tap gesture,
+   which is what the clipboard and share APIs actually require. */
+let shareBoxState = null;
+
+function showShareBox(blob, filename, link) {
+  const box = $("sharebox");
+  if (shareBoxState?.url) URL.revokeObjectURL(shareBoxState.url);
+  const url = URL.createObjectURL(blob);
+  shareBoxState = { blob, filename, link, url };
+  $("sharebox-img").src = url;
+  $("sharebox-link").hidden = !link;
+  box.hidden = false;
+}
+
+function hideShareBox() {
+  const box = $("sharebox");
+  box.hidden = true;
+  if (shareBoxState?.url) URL.revokeObjectURL(shareBoxState.url);
+  shareBoxState = null;
 }
 
 /* ---------- system status ---------- */
