@@ -138,8 +138,6 @@ a { color: inherit; }
   transition: opacity 0.15s ease;
 }
 
-/* hold-to-relock: the wordmark drains over the 1s hold as feedback */
-
 .masthead-controls {
   display: flex;
   align-items: center;
@@ -180,15 +178,6 @@ a { color: inherit; }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-
-/* Spin the button (not the inline SVG — some engines don't animate SVG
-   transforms). The 16px icon is centered in the 30px button, so rotating the
-   button around its own center spins the icon around the icon's center: a
-   clean, wobble-free turn. One full rotation per tap, always ending at 0°. */
-.refresh-btn { transform-origin: 50% 50%; }
-.refresh-btn.spinning { animation: refresh-spin 0.7s cubic-bezier(0.33, 0, 0.2, 1); }
-
-@keyframes refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
 .date-nav {
   display: flex;
@@ -1580,3 +1569,252 @@ main {
   -webkit-tap-highlight-color: transparent;
 }
 .profile-chipbtn:active { background: var(--rule); }
+
+/* ---------- iPhone shell behavior ---------- */
+/* the app never pans sideways or zooms; the map keeps its own gestures */
+html, body { overflow-x: hidden; }
+.masthead, main, #reader, .profiles, .sheet, .lightbox { touch-action: manipulation; }
+.masthead, .profiles, .sheet-card, .lightbox {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.profile-avatar, .profile-disc, .player-avatar, .player-avatar img {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- catch-up strip ---------- */
+.catchup {
+  margin: 4px 0 22px;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  background: var(--box);
+  overflow: hidden;
+}
+.catchup-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.catchup-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.catchup-count { font-size: 12px; color: var(--ink-2); flex: 1; }
+.catchup-clear {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 4px 10px;
+  border-radius: 999px;
+  -webkit-tap-highlight-color: transparent;
+}
+.catchup-clear:active { background: var(--rule); }
+.catchup-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 9px 14px;
+  -webkit-tap-highlight-color: transparent;
+}
+.catchup-row + .catchup-row { border-top: 1px solid var(--rule); }
+.catchup-row:active { background: var(--bg); }
+.catchup-tag {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.catchup-tag.upd { background: var(--ink-3); }
+.catchup-title { font-size: 13px; line-height: 1.4; color: var(--ink); min-width: 0; }
+.catchup-meta { flex: none; margin-left: auto; font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+
+/* ---------- feed finish line ---------- */
+.feed-done {
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  padding: 30px 0 12px;
+}
+
+/* ---------- reader: progress + next-up + text size ---------- */
+.reader-progress {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 3px;
+  padding: 0 var(--pad) 8px;
+  background: var(--bg);
+}
+.rp-seg {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--rule);
+  cursor: pointer;
+}
+.rp-seg.done { background: var(--ink-3); }
+.rp-seg.cur { background: var(--accent); }
+
+.reader-next { margin-top: 26px; }
+.reader-next-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--box);
+  -webkit-tap-highlight-color: transparent;
+}
+.reader-next-card:active { border-color: var(--ink-3); }
+.rn-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rn-title { font-family: var(--serif); font-size: 16px; line-height: 1.35; color: var(--ink); }
+
+.reader-size {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+  padding: 2px 8px;
+  border-radius: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
+.reader-size:active { background: var(--rule); }
+#reader.size-s .reader-body { font-size: 13.5px; }
+#reader.size-l .reader-body { font-size: 17px; }
+#reader.size-s .reader-body p, #reader.size-l .reader-body p { font-size: inherit; }
+
+/* ---------- mini-dossier bottom sheet ---------- */
+.sheet { position: fixed; inset: 0; z-index: 700; }
+.sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 12, 14, 0.42);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.sheet.open .sheet-backdrop { opacity: 1; }
+.sheet-card {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  max-width: 560px;
+  margin: 0 auto;
+  background: var(--box);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.25);
+  padding: 10px 18px calc(18px + env(safe-area-inset-bottom));
+  transform: translateY(102%);
+  transition: transform 0.28s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.sheet.open .sheet-card { transform: translateY(0); }
+.sheet-card::before {
+  content: "";
+  display: block;
+  width: 38px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--rule);
+  margin: 2px auto 12px;
+}
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.sheet-head .player-avatar { flex: none; }
+.sheet-head-text { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.sheet-name { font-family: var(--serif); font-weight: 700; font-size: 18px; line-height: 1.25; color: var(--ink); }
+.sheet-role { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.sheet-arrow { font-size: 20px; color: var(--ink-3); flex: none; }
+.sheet-tagline { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); margin: 12px 0 0; }
+.sheet-stats { display: flex; gap: 22px; margin: 14px 0 2px; }
+.sheet-stats b { display: block; font-size: 15px; color: var(--ink); }
+.sheet-stats span { font-size: 10.5px; color: var(--ink-3); letter-spacing: 0.04em; text-transform: uppercase; }
+.sheet-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 14px 0 4px;
+}
+.sheet-mention {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.sheet-mention + .sheet-mention { border-top: 1px solid var(--rule); }
+.sm-date { flex: none; font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+.sm-title { font-size: 13px; line-height: 1.4; color: var(--ink); }
+.sheet-full {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 11px;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--ink);
+  border-radius: 999px;
+  -webkit-tap-highlight-color: transparent;
+}
+.sheet-full:active { transform: scale(0.98); }
+
+/* ---------- image inspector (peek + lightbox) ---------- */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 750;
+  background: rgba(8, 9, 11, 0.82);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: lightbox-in 0.18s ease;
+}
+.lightbox[hidden] { display: none; }
+.lightbox img {
+  max-width: 88vw;
+  max-height: 80vh;
+  border-radius: 14px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+  animation: lightbox-img-in 0.2s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+@keyframes lightbox-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lightbox-img-in { from { transform: scale(0.82); } to { transform: scale(1); } }

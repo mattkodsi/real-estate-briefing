@@ -2,19 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#fafaf7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#101214" media="(prefers-color-scheme: dark)">
   <title>Real Estate Briefing</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗞️</text></svg>">
   <!-- installable PWA: manifest + iOS home-screen chrome; sw.js caches the app shell for offline -->
-  <link rel="manifest" href="manifest.webmanifest?v=29">
+  <link rel="manifest" href="manifest.webmanifest?v=30">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Briefing">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <!-- bump ?v= on every deploy so cached pages can never pair old code with new data -->
-  <link rel="stylesheet" href="css/style.css?v=29">
+  <link rel="stylesheet" href="css/style.css?v=30">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 </head>
 <body>
@@ -36,12 +36,6 @@
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="11" cy="11" r="7"></circle>
             <path d="M21 21l-4.35-4.35"></path>
-          </svg>
-        </button>
-        <button id="refresh-btn" class="icon-btn refresh-btn" aria-label="Refresh briefing" title="Refresh">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M23 4v6h-6"></path>
-            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
           </svg>
         </button>
         <button id="profile-btn" class="icon-btn profile-btn" aria-label="Lock and switch reader" title="Lock · switch reader" hidden>
@@ -138,10 +132,12 @@
     <div class="reader-bar">
       <button id="reader-back" aria-label="Back to briefing">‹ Back</button>
       <div class="reader-bar-right">
+        <button id="reader-size" class="reader-size" aria-label="Text size" title="Text size">Aa</button>
         <button id="reader-save" class="reader-save" aria-label="Save story" title="Save story">☆</button>
         <a id="reader-original" href="#" target="_blank" rel="noopener">Original ↗</a>
       </div>
     </div>
+    <div id="reader-progress" class="reader-progress" hidden></div>
     <article class="reader-article">
       <p class="reader-kicker" id="reader-kicker"></p>
       <h1 id="reader-title"></h1>
@@ -150,19 +146,30 @@
       <div class="reader-body" id="reader-body"></div>
       <aside class="reader-explainer" id="reader-explainer" hidden></aside>
       <div class="reader-coverage" id="reader-coverage" hidden></div>
+      <div id="reader-next" class="reader-next" hidden></div>
       <div class="reader-end">
         <a id="reader-original-end" href="#" target="_blank" rel="noopener">Read at the source ↗</a>
       </div>
     </article>
   </div>
 
+  <!-- bottom-sheet mini-dossier (players + dictionary terms) -->
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-backdrop" id="sheet-backdrop"></div>
+    <div class="sheet-card" id="sheet-card"></div>
+  </div>
+
+  <!-- image inspector: hold a player photo to peek (release to drop);
+       tap an article image to open, tap again to close -->
+  <div id="lightbox" class="lightbox" hidden><img id="lightbox-img" alt=""></div>
+
   <div id="toast" role="status"></div>
 
-  <script src="js/app.js?v=29"></script>
+  <script src="js/app.js?v=30"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js?v=29').catch(function () {});
+        navigator.serviceWorker.register('sw.js?v=30').catch(function () {});
       });
     }
   </script>

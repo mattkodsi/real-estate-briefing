@@ -108,18 +108,14 @@ async function init() {
   $("prev-day").addEventListener("click", () => stepDay(-1));
   $("next-day").addEventListener("click", () => stepDay(1));
 
-  // manual refresh — one clean 360° per tap (re-armed each click), toast on result.
-  // Class removed on a timer matched to the CSS duration (animationend doesn't
-  // fire reliably on inline SVG in every engine), so the stop is deterministic.
-  const refreshBtn = $("refresh-btn");
-  let spinTimer;
-  refreshBtn.addEventListener("click", () => {
-    refreshBtn.classList.remove("spinning");
-    void refreshBtn.offsetWidth; // reflow so a rapid re-tap restarts the spin from 0°
-    refreshBtn.classList.add("spinning");
-    clearTimeout(spinTimer);
-    spinTimer = setTimeout(() => refreshBtn.classList.remove("spinning"), 720);
-    refreshData(false, true);
+  // the wordmark refreshes when you're already on the briefing (data AND app
+  // updates — see hardRefresh); from any other view it just navigates home
+  document.querySelector(".wordmark").addEventListener("click", (e) => {
+    const h = location.hash;
+    if (h === "" || h === "#/" || h.startsWith("#/day/")) {
+      e.preventDefault();
+      hardRefresh();
+    }
   });
 
   $("search-btn").addEventListener("click", () => { location.hash = "/search"; });
@@ -143,27 +139,107 @@ async function init() {
     resizeTimer = setTimeout(() => { if (!$("view-rates").hidden) renderRates(); }, 200);
   });
   $("reader-back").addEventListener("click", () => closeReaderNav());
-  // entity/term links live inside clickable cards; capture phase wins over the card's own click
+  // entity/term links live inside clickable cards; capture phase wins over the
+  // card's own click. They open the mini-dossier sheet (full page one tap away).
   document.addEventListener("click", (e) => {
     const entity = e.target.closest?.(".entity-link");
     if (entity) {
       e.preventDefault();
       e.stopPropagation();
-      location.hash = `/player/${entity.dataset.slug}`;
+      openPlayerSheet(entity.dataset.slug);
       return;
     }
     const term = e.target.closest?.(".term-link");
     if (term) {
       e.preventDefault();
       e.stopPropagation();
-      location.hash = `/term/${term.dataset.slug}`;
+      openTermSheet(term.dataset.slug);
     }
   }, true);
+  $("sheet-backdrop").addEventListener("click", closeSheet);
+  // swipe the sheet down to dismiss (Instagram-style)
+  let sheetTouchY = null;
+  $("sheet-card").addEventListener("touchstart", (e) => { sheetTouchY = e.touches[0].clientY; }, { passive: true });
+  $("sheet-card").addEventListener("touchmove", (e) => {
+    if (sheetTouchY !== null && e.touches[0].clientY - sheetTouchY > 70) { sheetTouchY = null; closeSheet(); }
+  }, { passive: true });
+
+  // reader: swipe left/right moves through the day's stories in feed order
+  const reader = $("reader");
+  let swipeStart = null;
+  reader.addEventListener("touchstart", (e) => {
+    if (e.touches.length === 1) swipeStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  }, { passive: true });
+  reader.addEventListener("touchend", (e) => {
+    if (!swipeStart) return;
+    const dx = e.changedTouches[0].clientX - swipeStart.x;
+    const dy = e.changedTouches[0].clientY - swipeStart.y;
+    swipeStart = null;
+    if (Math.abs(dx) > 70 && Math.abs(dy) < 60) readerStep(dx < 0 ? 1 : -1);
+  }, { passive: true });
+
+  // text size (persists per reader profile)
+  $("reader-size").addEventListener("click", () => {
+    const order = ["m", "l", "s"];
+    const cur = pref("textScale", "m");
+    setPref("textScale", order[(order.indexOf(cur) + 1) % order.length]);
+    applyTextScale();
+  });
+
+  // hold a player photo to peek at it full-size; release to drop (Instagram-style)
+  let peekTimer = null, peeking = false;
+  document.addEventListener("pointerdown", (e) => {
+    const img = e.target.closest?.(".player-avatar img");
+    if (!img || !img.src) return;
+    peekTimer = setTimeout(() => {
+      peeking = true;
+      $("lightbox-img").src = img.src;
+      $("lightbox").classList.add("peek");
+      $("lightbox").hidden = false;
+    }, 160);
+  });
+  const endPeek = () => {
+    clearTimeout(peekTimer);
+    if (!peeking) return;
+    peeking = false;
+    $("lightbox").hidden = true;
+    $("lightbox").classList.remove("peek");
+    // the release shouldn't also fire the card/link underneath
+    document.addEventListener("click", (ev) => { ev.stopPropagation(); ev.preventDefault(); }, { capture: true, once: true });
+  };
+  document.addEventListener("pointerup", endPeek);
+  document.addEventListener("pointercancel", endPeek);
+
+  // tap an article image to inspect it; tap anywhere to close
+  document.addEventListener("click", (e) => {
+    const box = $("lightbox");
+    if (!box.hidden && !box.classList.contains("peek")) { box.hidden = true; return; }
+    const img = e.target.closest?.("#reader-body img, #reader-hero-img");
+    if (img && img.src) {
+      e.preventDefault();
+      $("lightbox-img").src = img.src;
+      box.hidden = false;
+    }
+  });
   $("map-mode-day").addEventListener("click", () => setMapMode("day"));
   $("map-mode-all").addEventListener("click", () => setMapMode("all"));
   window.addEventListener("hashchange", route);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("reader").hidden) closeReaderNav();
+    if (e.target.matches?.("input, textarea")) return;
+    if (e.key === "Escape") {
+      if (!$("sheet").hidden) { closeSheet(); return; }
+      if (!$("lightbox").hidden) { $("lightbox").hidden = true; return; }
+      if (!$("reader").hidden) closeReaderNav();
+      return;
+    }
+    if (!$("reader").hidden) {
+      if (e.key === "j" || e.key === "ArrowRight") readerStep(1);
+      else if (e.key === "k" || e.key === "ArrowLeft") readerStep(-1);
+      else if (e.key === "s") $("reader-save").click();
+    } else if (e.key === "/") {
+      e.preventDefault();
+      location.hash = "/search";
+    }
   });
 
   route();
@@ -248,6 +324,31 @@ function flashToast(msg) {
   toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
 }
 
+/* Wordmark tap on the briefing: refresh the DATA (Supabase re-query) and check
+   for an APP update — if a new service worker version installs, reload so the
+   fresh shell takes over immediately instead of on some later visit. */
+async function hardRefresh() {
+  refreshData(false, true);
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (!reg) return;
+    reg.addEventListener("updatefound", () => {
+      const w = reg.installing;
+      if (w) w.addEventListener("statechange", () => { if (w.state === "activated") location.reload(); });
+    });
+    await reg.update();
+    if (reg.waiting) location.reload();
+  } catch { /* offline — data refresh already toasted */ }
+}
+
+/* iPhone: the app shell must never zoom. Double-tap is disabled via
+   touch-action, pinch via the viewport meta (honored in installed web apps)
+   plus Safari's gesture events here. The map keeps its own pinch (Leaflet
+   handles touches itself). */
+window.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
+window.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });
+window.addEventListener("wheel", (e) => { if (e.ctrlKey || e.metaKey) e.preventDefault(); }, { passive: false });
+
 function formatDate(iso, opts) {
   const [y, m, d] = iso.split("-").map(Number);
   return new Date(y, m - 1, d).toLocaleDateString("en-US", opts);
@@ -256,6 +357,8 @@ function formatDate(iso, opts) {
 /* ---------- routing ---------- */
 
 function route() {
+  const sheet = $("sheet");
+  if (sheet && !sheet.hidden) closeSheet(); // a route change always drops the sheet
   const h = location.hash;
   let m;
   if ((m = h.match(/^#\/story\/(\d{4}-\d{2}-\d{2})\/(.+)$/))) {
@@ -723,10 +826,93 @@ function groupLabel(key) {
   return key;
 }
 
+/* ---------- catch-up (per reader profile) ----------
+   The routine adds stories all day. Each profile keeps a snapshot of the last
+   state it CLEARED; anything newer renders as a duplicate strip on top of the
+   feed (the feed itself stays properly sorted below). Clear advances the
+   snapshot. The snapshot only ever covers the latest day, so it stays tiny. */
+
+function storySig(s) {
+  // cheap change signature: content growth, new outlets, a new hero image
+  return [contentWords(s), (s.coverage || []).length, s.image ? 1 : 0, (s.title || "").length].join("|");
+}
+
+function snapshotDay(day) {
+  const sig = {};
+  for (const s of day.stories || []) sig[s.id] = storySig(s);
+  return { date: day.date, generatedAt: day.generatedAt, at: new Date().toISOString(), sig };
+}
+
+function renderCatchup(feed, day) {
+  const latest = state.dates[state.dates.length - 1];
+  if (day.date !== latest) return;
+  const seen = pref("seen", null);
+  if (!seen || seen.date !== day.date) {
+    // first look at this day: baseline silently — catch-up measures from here
+    setPref("seen", snapshotDay(day));
+    return;
+  }
+  const fresh = [], updated = [];
+  for (const s of day.stories || []) {
+    const old = seen.sig?.[s.id];
+    if (old === undefined) fresh.push(s);
+    else if (old !== storySig(s) && !s.brief) updated.push(s);
+  }
+  if (!fresh.length && !updated.length) return;
+
+  const box = document.createElement("div");
+  box.className = "catchup";
+  const head = document.createElement("div");
+  head.className = "catchup-head";
+  const label = document.createElement("span");
+  label.className = "catchup-label";
+  const since = seen.at ? new Date(seen.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "you left";
+  label.textContent = `Since ${since}`;
+  const count = document.createElement("span");
+  count.className = "catchup-count";
+  count.textContent = [fresh.length ? `${fresh.length} new` : null,
+                       updated.length ? `${updated.length} updated` : null].filter(Boolean).join(" · ");
+  const clear = document.createElement("button");
+  clear.className = "catchup-clear";
+  clear.textContent = "Clear";
+  clear.addEventListener("click", () => { setPref("seen", snapshotDay(day)); renderFeed(day); });
+  head.append(label, count, clear);
+  box.appendChild(head);
+
+  const addRow = (s, tag) => {
+    const row = document.createElement("button");
+    row.className = "catchup-row";
+    row.addEventListener("click", () => {
+      if (!s.brief && isExpandable(s)) location.hash = `/story/${day.date}/${s.id}`;
+      else if (s.url) window.open(s.url, "_blank", "noopener");
+    });
+    const b = document.createElement("span");
+    b.className = "catchup-tag" + (tag === "updated" ? " upd" : "");
+    b.textContent = tag === "updated" ? "Updated" : "New";
+    const t = document.createElement("span");
+    t.className = "catchup-title";
+    t.textContent = s.title;
+    row.append(b, t);
+    const meta = s.section || s.market;
+    if (meta) {
+      const m = document.createElement("span");
+      m.className = "catchup-meta";
+      m.textContent = meta;
+      row.appendChild(m);
+    }
+    box.appendChild(row);
+  };
+  fresh.forEach((s) => addRow(s, "new"));
+  updated.forEach((s) => addRow(s, "updated"));
+  feed.appendChild(box);
+}
+
 function renderFeed(day) {
   const feed = $("feed");
   feed.innerHTML = "";
   const all = day.stories || [];
+
+  renderCatchup(feed, day);
 
   if (!all.length) {
     const p = document.createElement("p");
@@ -805,6 +991,15 @@ function renderFeed(day) {
       strip.appendChild(el);
     }
     feed.appendChild(strip);
+  }
+
+  // a finish line for the daily read
+  if (!filtering) {
+    const mins = fullStories.reduce((sum, s) => sum + readMinutes(s), 0);
+    const done = document.createElement("div");
+    done.className = "feed-done";
+    done.textContent = `You're all caught up ✓ · ${all.length} ${all.length === 1 ? "story" : "stories"}${mins ? ` · ~${mins} min` : ""}`;
+    feed.appendChild(done);
   }
 }
 
@@ -2615,6 +2810,90 @@ function buildHistorySvg(r, key, range) {
 
 /* ---------- reader ---------- */
 
+/* ---------- reader navigation (swipe / keys through the day) ----------
+   Order mirrors the feed: featured first, then groups exactly as rendered.
+   Only stories with real article text participate — the others are cards
+   that open their source, not reader pages. */
+
+function feedOrder(day) {
+  const full = (day.stories || []).filter((s) => !s.brief);
+  const featured = full.filter((s) => s.featured);
+  const rest = full.filter((s) => !s.featured);
+  const key = state.groupBy;
+  const groups = new Map();
+  for (const s of rest) {
+    const k = s[key] || (key === "section" ? "More" : "Other");
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(s);
+  }
+  const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const out = [...featured];
+  for (const [, list] of ordered) {
+    if (key !== "section") list.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
+    out.push(...list);
+  }
+  return out.filter(isExpandable);
+}
+
+function buildReaderNav(day, story) {
+  const list = feedOrder(day);
+  return { date: day.date, list, idx: list.findIndex((s) => s.id === story.id) };
+}
+
+function readerStep(delta) {
+  const nav = state.readerNav;
+  if (!nav || nav.idx < 0) return;
+  const next = nav.list[nav.idx + delta];
+  if (!next) {
+    flashToast(delta > 0 ? "That's the whole briefing ✓" : "Start of the briefing");
+    return;
+  }
+  location.hash = `/story/${nav.date}/${next.id}`;
+  flashToast(`${next.section ? next.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`);
+}
+
+function renderReaderProgress() {
+  const bar = $("reader-progress");
+  bar.innerHTML = "";
+  const nav = state.readerNav;
+  if (!nav || nav.idx < 0 || nav.list.length < 2) { bar.hidden = true; return; }
+  bar.hidden = false;
+  nav.list.forEach((s, i) => {
+    const seg = document.createElement("span");
+    seg.className = "rp-seg" + (i < nav.idx ? " done" : i === nav.idx ? " cur" : "");
+    seg.title = s.title;
+    seg.addEventListener("click", () => { location.hash = `/story/${nav.date}/${s.id}`; });
+    bar.appendChild(seg);
+  });
+}
+
+function renderReaderNext() {
+  const box = $("reader-next");
+  box.innerHTML = "";
+  const nav = state.readerNav;
+  const next = nav && nav.idx >= 0 ? nav.list[nav.idx + 1] : null;
+  if (!next) { box.hidden = true; return; }
+  box.hidden = false;
+  const btn = document.createElement("button");
+  btn.className = "reader-next-card";
+  const k = document.createElement("span");
+  k.className = "rn-kicker";
+  k.textContent = "Next" + (next.section ? " · " + next.section : "");
+  const t = document.createElement("span");
+  t.className = "rn-title";
+  t.textContent = next.title;
+  btn.append(k, t);
+  btn.addEventListener("click", () => { location.hash = `/story/${nav.date}/${next.id}`; });
+  box.appendChild(btn);
+}
+
+function applyTextScale() {
+  const sc = pref("textScale", "m");
+  const r = $("reader");
+  r.classList.toggle("size-s", sc === "s");
+  r.classList.toggle("size-l", sc === "l");
+}
+
 async function openReaderRoute(date, id) {
   const day = await getDay(date);
   const story = (day?.stories || []).find((s) => s.id === id);
@@ -2690,6 +2969,12 @@ async function openReaderRoute(date, id) {
   };
   paintSave();
   saveBtn.onclick = () => { const now = toggleSaved(story, date); paintSave(); flashToast(now ? "Saved" : "Removed"); };
+
+  // swipe/keyboard navigation context + progress + the next-up card
+  state.readerNav = buildReaderNav(day, story);
+  renderReaderProgress();
+  renderReaderNext();
+  applyTextScale();
 
   const reader = $("reader");
   reader.hidden = false;
@@ -2802,6 +3087,145 @@ function showReaderVersion(story, date, idx) {
 function hideReader() {
   $("reader").hidden = true;
   document.body.classList.remove("reader-open");
+}
+
+/* ---------- mini-dossier sheets ----------
+   Tapping any linked name or term opens a bottom sheet — a glance, not a
+   navigation. The full page is one tap away (header or the footer button). */
+
+function openSheet(build) {
+  const sheet = $("sheet");
+  const card = $("sheet-card");
+  card.innerHTML = "";
+  build(card);
+  sheet.hidden = false;
+  requestAnimationFrame(() => sheet.classList.add("open"));
+}
+
+function closeSheet() {
+  const sheet = $("sheet");
+  sheet.classList.remove("open");
+  setTimeout(() => { sheet.hidden = true; }, 260);
+}
+
+function sheetGo(hash) {
+  closeSheet();
+  location.hash = hash;
+}
+
+async function openPlayerSheet(slug) {
+  const players = await getPlayers();
+  const p = players.get(slug);
+  if (!p) { location.hash = `/player/${slug}`; return; }
+  openSheet((card) => {
+    const head = document.createElement("button");
+    head.className = "sheet-head";
+    head.addEventListener("click", () => sheetGo(`/player/${slug}`));
+    head.appendChild(playerAvatar(p, false));
+    const ht = document.createElement("span");
+    ht.className = "sheet-head-text";
+    const nm = document.createElement("span");
+    nm.className = "sheet-name";
+    nm.textContent = p.name;
+    const rl = document.createElement("span");
+    rl.className = "sheet-role";
+    rl.textContent = p.role || (p.type === "company" ? "Company" : "");
+    ht.append(nm, rl);
+    head.appendChild(ht);
+    const arrow = document.createElement("span");
+    arrow.className = "sheet-arrow";
+    arrow.textContent = "›";
+    head.appendChild(arrow);
+    card.appendChild(head);
+
+    if (p.tagline) {
+      const tg = document.createElement("p");
+      tg.className = "sheet-tagline";
+      tg.textContent = p.tagline;
+      card.appendChild(tg);
+    }
+
+    const st = p.stats || {};
+    const stats = document.createElement("div");
+    stats.className = "sheet-stats";
+    const stat = (v, l) => {
+      const d = document.createElement("div");
+      const b = document.createElement("b");
+      b.textContent = v;
+      const s = document.createElement("span");
+      s.textContent = l;
+      d.append(b, s);
+      return d;
+    };
+    stats.appendChild(stat(st.mentions ?? (p.mentions || []).length, "mentions"));
+    if (st.dealVolumeUsd) stats.appendChild(stat(fmtValue(st.dealVolumeUsd), "tracked volume"));
+    if (st.lastSeen) stats.appendChild(stat(formatDate(st.lastSeen, { month: "short", day: "numeric" }), "last seen"));
+    card.appendChild(stats);
+
+    const ms = (p.mentions || []).slice(0, 3);
+    if (ms.length) {
+      const lbl = document.createElement("div");
+      lbl.className = "sheet-label";
+      lbl.textContent = "Recent coverage";
+      card.appendChild(lbl);
+      for (const m of ms) {
+        const row = document.createElement("button");
+        row.className = "sheet-mention";
+        const d = document.createElement("span");
+        d.className = "sm-date";
+        d.textContent = formatDate(m.date, { month: "short", day: "numeric" });
+        const t = document.createElement("span");
+        t.className = "sm-title";
+        t.textContent = m.title;
+        row.append(d, t);
+        row.addEventListener("click", () => sheetGo(`/story/${m.date}/${m.id}`));
+        card.appendChild(row);
+      }
+    }
+
+    const full = document.createElement("button");
+    full.className = "sheet-full";
+    full.textContent = "Full profile →";
+    full.addEventListener("click", () => sheetGo(`/player/${slug}`));
+    card.appendChild(full);
+  });
+}
+
+async function openTermSheet(slug) {
+  const terms = await getTerms();
+  const t = terms.get(slug);
+  if (!t) { location.hash = `/term/${slug}`; return; }
+  openSheet((card) => {
+    const head = document.createElement("button");
+    head.className = "sheet-head";
+    head.addEventListener("click", () => sheetGo(`/term/${slug}`));
+    const ht = document.createElement("span");
+    ht.className = "sheet-head-text";
+    const nm = document.createElement("span");
+    nm.className = "sheet-name";
+    nm.textContent = t.term;
+    const rl = document.createElement("span");
+    rl.className = "sheet-role";
+    rl.textContent = t.category || "Dictionary";
+    ht.append(nm, rl);
+    head.appendChild(ht);
+    const arrow = document.createElement("span");
+    arrow.className = "sheet-arrow";
+    arrow.textContent = "›";
+    head.appendChild(arrow);
+    card.appendChild(head);
+
+    const def = document.createElement("p");
+    def.className = "sheet-tagline";
+    def.textContent = t.shortDef || (t.definition || "").split("\n")[0];
+    card.appendChild(def);
+
+    const full = document.createElement("button");
+    full.className = "sheet-full";
+    full.textContent = "Full entry →";
+    full.addEventListener("click", () => sheetGo(`/term/${slug}`));
+    card.appendChild(full);
+  });
 }
 
 function closeReaderNav() {
