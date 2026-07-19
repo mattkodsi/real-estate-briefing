@@ -4084,6 +4084,18 @@ function cardWrapText(x, text, maxWidth, maxLines) {
 }
 
 async function shareStoryCard(story, date) {
+  // iOS Messages drops the image if text shares the payload, so the link
+  // travels via the clipboard instead: copied now (inside the tap gesture),
+  // pasted by the sender right under the card. Query/tracking params stripped.
+  let link = null;
+  if (story.url) {
+    try {
+      const u = new URL(story.url);
+      link = u.origin + u.pathname;
+    } catch { link = story.url; }
+    try { await navigator.clipboard.writeText(link); } catch { link = null; }
+  }
+
   const W = 1080, H = 1350, P = 96;
   const c = document.createElement("canvas");
   c.width = W;
@@ -4190,6 +4202,7 @@ async function shareStoryCard(story, date) {
       // files ONLY — iOS Messages drops the attachment if a title/text
       // rides along with it (WebKit quirk)
       await navigator.share({ files: [file] });
+      if (link) flashToast("Article link copied — paste it under the card");
       return;
     }
   } catch (e) {
@@ -4197,6 +4210,7 @@ async function shareStoryCard(story, date) {
   }
   // desktop / unsupported: open the card in a tab to save manually
   window.open(URL.createObjectURL(blob), "_blank", "noopener");
+  if (link) flashToast("Article link copied");
 }
 
 /* ---------- system status ---------- */
