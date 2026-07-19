@@ -4150,38 +4150,23 @@ async function shareStoryCard(story, date) {
   x.lineTo(W - P, P + 100);
   x.stroke();
 
-  let y = P + 190;
   x.textAlign = "left";
+  const maxW = W - 2 * P;
 
-  // section kicker
-  if (story.section) {
-    x.fillStyle = "#2158a8";
-    x.font = `700 28px ${SANS}`;
-    if ("letterSpacing" in x) x.letterSpacing = "3px";
-    x.fillText(story.section.toUpperCase(), P, y);
-    if ("letterSpacing" in x) x.letterSpacing = "0px";
-    y += 64;
+  // measure first, draw second: the headline shrinks to fit long titles
+  // (78px → 66px → 58px) and the whole block centers vertically between the
+  // masthead rule and the footer instead of leaving dead air at the bottom
+  let headSize = 78, headLH = 92, headLines;
+  for (const [size, lh] of [[78, 92], [66, 79], [58, 70]]) {
+    headSize = size;
+    headLH = lh;
+    x.font = `700 ${size}px ${SERIF}`;
+    headLines = cardWrapText(x, story.title, maxW, 5);
+    if (headLines.length <= 3) break;
   }
-
-  // headline
-  x.fillStyle = "#14181d";
-  x.font = `700 78px ${SERIF}`;
-  for (const line of cardWrapText(x, story.title, W - 2 * P, 5)) {
-    x.fillText(line, P, y);
-    y += 92;
-  }
-  y += 22;
-
-  // summary
-  x.fillStyle = "#59626d";
   x.font = `400 37px ${SANS}`;
-  for (const line of cardWrapText(x, story.summary || "", W - 2 * P, 5)) {
-    x.fillText(line, P, y);
-    y += 54;
-  }
-  y += 40;
+  const sumLines = cardWrapText(x, story.summary || "", maxW, 5);
 
-  // chips
   const chips = [];
   if (story.dealType) chips.push(story.dealType);
   if (story.market) chips.push(story.market);
@@ -4189,6 +4174,44 @@ async function shareStoryCard(story, date) {
   if (v) chips.push(v);
   const per = derivedMetric(story);
   if (per) chips.push(per);
+
+  const kickerH = story.section ? 28 + 56 : 0;
+  const blockH = kickerH + headLines.length * headLH + 26
+    + (sumLines.length ? sumLines.length * 54 + 40 : 0)
+    + (chips.length ? 58 : 0);
+  const contentTop = P + 100 + 56;           // below the masthead rule
+  const contentBottom = H - P - 52 - 60;     // above the footer rule
+  let y = contentTop + Math.max(0, (contentBottom - contentTop - blockH) / 2) + headSize * 0.8;
+
+  // section kicker
+  if (story.section) {
+    x.fillStyle = "#2158a8";
+    x.font = `700 28px ${SANS}`;
+    if ("letterSpacing" in x) x.letterSpacing = "3px";
+    x.fillText(story.section.toUpperCase(), P, y - headSize * 0.8 + 16);
+    if ("letterSpacing" in x) x.letterSpacing = "0px";
+    y += kickerH;
+  }
+
+  // headline
+  x.fillStyle = "#14181d";
+  x.font = `700 ${headSize}px ${SERIF}`;
+  for (const line of headLines) {
+    x.fillText(line, P, y);
+    y += headLH;
+  }
+  y += 26;
+
+  // summary
+  x.fillStyle = "#59626d";
+  x.font = `400 37px ${SANS}`;
+  for (const line of sumLines) {
+    x.fillText(line, P, y);
+    y += 54;
+  }
+  if (sumLines.length) y += 40;
+
+  // chips
   x.font = `600 30px ${SANS}`;
   let cx = P;
   for (const text of chips) {
