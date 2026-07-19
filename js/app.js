@@ -2847,6 +2847,13 @@ function buildReaderNav(day, story) {
   return { date: day.date, list, idx: list.findIndex((s) => s.id === story.id) };
 }
 
+/* Moving story-to-story REPLACES the history entry instead of pushing one:
+   however far you've swiped, one Back (button or iOS edge swipe) returns to
+   the feed — never a rewind through every story you passed. */
+function readerGo(date, id) {
+  location.replace(`#/story/${date}/${id}`);
+}
+
 function readerStep(delta) {
   const nav = state.readerNav;
   if (!nav || nav.idx < 0) return;
@@ -2855,7 +2862,7 @@ function readerStep(delta) {
     flashToast(delta > 0 ? "That's the whole briefing ✓" : "Start of the briefing");
     return;
   }
-  location.hash = `/story/${nav.date}/${next.id}`;
+  readerGo(nav.date, next.id);
   flashToast(`${next.section ? next.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`);
 }
 
@@ -2869,7 +2876,7 @@ function renderReaderProgress() {
     const seg = document.createElement("span");
     seg.className = "rp-seg" + (i < nav.idx ? " done" : i === nav.idx ? " cur" : "");
     seg.title = s.title;
-    seg.addEventListener("click", () => { location.hash = `/story/${nav.date}/${s.id}`; });
+    seg.addEventListener("click", () => readerGo(nav.date, s.id));
     bar.appendChild(seg);
   });
 }
@@ -2890,7 +2897,7 @@ function renderReaderNext() {
   t.className = "rn-title";
   t.textContent = next.title;
   btn.append(k, t);
-  btn.addEventListener("click", () => { location.hash = `/story/${nav.date}/${next.id}`; });
+  btn.addEventListener("click", () => readerGo(nav.date, next.id));
   box.appendChild(btn);
 }
 
