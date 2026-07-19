@@ -856,7 +856,7 @@ function renderCatchup(feed, day) {
   for (const s of day.stories || []) {
     const old = seen.sig?.[s.id];
     if (old === undefined) fresh.push(s);
-    else if (old !== storySig(s) && !s.brief) updated.push(s);
+    else if (old !== storySig(s)) updated.push(s);
   }
   if (!fresh.length && !updated.length) return;
 
@@ -883,7 +883,7 @@ function renderCatchup(feed, day) {
     const row = document.createElement("button");
     row.className = "catchup-row";
     row.addEventListener("click", () => {
-      if (!s.brief && isExpandable(s)) location.hash = `/story/${day.date}/${s.id}`;
+      if (isExpandable(s)) location.hash = `/story/${day.date}/${s.id}`;
       else if (s.url) window.open(s.url, "_blank", "noopener");
     });
     const b = document.createElement("span");
@@ -974,9 +974,14 @@ function renderFeed(day) {
     const strip = document.createElement("div");
     strip.className = "brief-strip";
     for (const s of briefs) {
-      const el = document.createElement(s.url ? "button" : "div");
+      // briefs are compact in the FEED, not lesser stories: once the fill loop
+      // has their article text they open in the reader like anything else
+      const el = document.createElement(s.url || isExpandable(s) ? "button" : "div");
       el.className = "brief-row";
-      if (s.url) el.addEventListener("click", () => window.open(s.url, "_blank", "noopener"));
+      el.addEventListener("click", () => {
+        if (isExpandable(s)) location.hash = `/story/${day.date}/${s.id}`;
+        else if (s.url) window.open(s.url, "_blank", "noopener");
+      });
       const t = document.createElement("span");
       t.className = "brief-title";
       t.textContent = s.title;
@@ -2832,6 +2837,8 @@ function feedOrder(day) {
     if (key !== "section") list.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
     out.push(...list);
   }
+  // readable briefs ride at the end, mirroring the "Also today" strip
+  out.push(...(day.stories || []).filter((s) => s.brief));
   return out.filter(isExpandable);
 }
 

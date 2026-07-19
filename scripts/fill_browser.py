@@ -93,7 +93,7 @@ def main() -> int:
     stories = day.get("stories") or []
     targets = [s for s in stories
                if fill_content._words(s.get("content")) < fill_content.MIN_WORDS
-               and s.get("url") and not s.get("brief")]
+               and s.get("url")]
     print(f"{date} ({source}): {len(stories)} stories, {len(targets)} need content")
     if not targets:
         print("SUMMARY: nothing to fill")

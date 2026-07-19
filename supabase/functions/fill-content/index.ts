@@ -173,7 +173,7 @@ Deno.serve(async (req: Request) => {
   const stories: Record<string, unknown>[] = day.stories || [];
   const wordsIn = (h: unknown) => wordsOf(String(h || "").replace(/<[^>]+>/g, " "));
   const targets = stories.filter((s) =>
-    wordsIn(s.content) < MIN_WORDS && s.url && !s.brief).slice(0, BATCH);
+    wordsIn(s.content) < MIN_WORDS && s.url).slice(0, BATCH);
   if (!targets.length) {
     return new Response(JSON.stringify({ ok: true, note: "nothing to fill" }), { headers: HEADERS });
   }
