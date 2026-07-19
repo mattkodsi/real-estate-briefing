@@ -66,6 +66,16 @@ def push_terms(path: pathlib.Path) -> None:
     print(f"pushed {len(terms)} terms")
 
 
+def push_keyed(path: pathlib.Path, table: str, doc_key: str, pk: str) -> None:
+    """Registries stored as one local file of keyed entries, one Supabase row each
+    (threads / events / metrics — same ride-along pattern as players and terms)."""
+    doc = json.loads(path.read_text())
+    entries = doc.get(doc_key, {})
+    for key, entry in entries.items():
+        upsert(table, {pk: key, "data": entry, "updated_at": doc.get("generatedAt")})
+    print(f"pushed {len(entries)} {doc_key}")
+
+
 def main() -> None:
     only = sys.argv[1] if len(sys.argv) > 1 else None
     days = sorted(DATA.glob("????-??-??.json"))
@@ -82,7 +92,16 @@ def main() -> None:
     terms = DATA / "terms.json"
     if terms.exists():
         push_terms(terms)  # the dictionary rides along on every publish
-    if not days and not weeks and not players.exists() and not terms.exists():
+    registries = [
+        (DATA / "threads.json", "threads", "threads", "slug"),
+        (DATA / "events.json", "events", "events", "id"),
+        (DATA / "metrics.json", "metrics", "metrics", "id"),
+    ]
+    for path, table, doc_key, pk in registries:
+        if path.exists():
+            push_keyed(path, table, doc_key, pk)
+    if not days and not weeks and not players.exists() and not terms.exists() \
+            and not any(p.exists() for p, *_ in registries):
         print("nothing to push")
 
 

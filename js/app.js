@@ -146,6 +146,7 @@ async function init() {
   });
 
   $("search-btn").addEventListener("click", () => { location.hash = "/search"; });
+  $("profile-btn").addEventListener("click", () => showProfilePicker(false));
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) refreshData(true);
@@ -1077,16 +1078,10 @@ async function renderHistory() {
   }
 }
 
-/* ---------- saved stories (bookmarks) ---------- */
+/* ---------- saved stories (bookmarks — kept per reader profile) ---------- */
 
-const SAVED_KEY = "briefing_saved_v1";
-
-function getSaved() {
-  try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; }
-}
-function setSavedList(list) {
-  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); } catch { /* private mode: no-op */ }
-}
+function getSaved() { return pref("saved", []); }
+function setSavedList(list) { setPref("saved", list); }
 function savedKey(date, id) { return date + "/" + id; }
 function isSaved(date, id) { return getSaved().some((s) => s.key === savedKey(date, id)); }
 function toggleSaved(story, date) {
@@ -2831,6 +2826,362 @@ function closeReaderNav() {
   else location.hash = "/";
 }
 
+/* ---------- reader profiles ----------
+   Everything personal — saved stories today; read state, watchlists, and
+   settings as they arrive — lives under a named profile (one `prefs` row per
+   reader in Supabase), so one person's actions never touch another's. The
+   device remembers its reader across visits; Guest persists nothing at all. */
+
+const PROFILE_KEY = "briefing_profile_v1";     // this device's reader (slug)
+const GUEST_KEY = "briefing_guest_v1";         // sessionStorage: guest for this visit only
+const LEGACY_SAVED_KEY = "briefing_saved_v1";  // pre-profiles bookmarks, migrated on first pick
+
+const FOUNDERS = [
+  { slug: "matthew", name: "Matthew", color: "#8a3b46" },
+  { slug: "daniel",  name: "Daniel",  color: "#215a8f" },
+  { slug: "rafe",    name: "Rafe",    color: "#2e7d5b" },
+  { slug: "alain",   name: "Alain",   color: "#b26a00" },
+];
+const PROFILE_COLORS = ["#8a3b46", "#215a8f", "#2e7d5b", "#b26a00", "#6d4fa3", "#00778b", "#5d4037", "#a34f6c"];
+
+const profile = { slug: null, name: null, color: null, guest: false, data: {}, dirty: new Set() };
+
+function profileCacheKey(slug) { return "briefing_prefs_" + slug; }
+
+function rememberedProfile() {
+  try { if (sessionStorage.getItem(GUEST_KEY) === "1") return "guest"; } catch { /* ignore */ }
+  try { return localStorage.getItem(PROFILE_KEY); } catch { return null; }
+}
+
+async function fetchProfileRows() {
+  try { return await sb("prefs?select=profile,data"); } catch { return []; }
+}
+
+/* The picker's roster: named rows from Supabase layered over the founding four. */
+function profileRoster(rows) {
+  const bySlug = new Map(FOUNDERS.map((f) => [f.slug, { ...f }]));
+  for (const r of rows) {
+    const meta = r.data || {};
+    bySlug.set(r.profile, {
+      slug: r.profile,
+      name: meta.name || r.profile,
+      color: meta.color || PROFILE_COLORS[bySlug.size % PROFILE_COLORS.length],
+    });
+  }
+  return [...bySlug.values()];
+}
+
+async function activateProfile(slug, meta) {
+  if (slug === "guest") {
+    Object.assign(profile, { slug: "guest", name: "Guest", color: null, guest: true, data: {}, dirty: new Set() });
+    try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
+    paintAvatar();
+    return;
+  }
+  meta = meta || FOUNDERS.find((f) => f.slug === slug) || null;
+  let data = null;
+  try {
+    const rows = await sb(`prefs?profile=eq.${encodeURIComponent(slug)}&select=data`);
+    data = rows[0]?.data ?? null;
+  } catch { /* offline — fall back to this device's cached copy */ }
+  if (data === null) {
+    try { data = JSON.parse(localStorage.getItem(profileCacheKey(slug)) || "null"); } catch { data = null; }
+  }
+  data = data || { name: meta?.name || slug, color: meta?.color, createdAt: new Date().toISOString().slice(0, 10) };
+  if (!data.name) data.name = meta?.name || slug;
+  if (!data.color) data.color = meta?.color || PROFILE_COLORS[0];
+
+  Object.assign(profile, { slug, name: data.name, color: data.color, guest: false, data, dirty: new Set() });
+
+  // one-time migration: bookmarks saved before profiles existed join this reader
+  try {
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_SAVED_KEY) || "[]");
+    if (legacy.length) {
+      const have = new Set((data.saved || []).map((s) => s.key));
+      data.saved = [...(data.saved || []), ...legacy.filter((s) => !have.has(s.key))];
+      profile.dirty.add("saved");
+    }
+    localStorage.removeItem(LEGACY_SAVED_KEY);
+  } catch { /* ignore */ }
+
+  try {
+    localStorage.setItem(PROFILE_KEY, slug);
+    localStorage.setItem(profileCacheKey(slug), JSON.stringify(data));
+    sessionStorage.removeItem(GUEST_KEY);
+  } catch { /* ignore */ }
+  schedulePrefsFlush(true); // ensure the row exists (and carries any migration)
+  paintAvatar();
+}
+
+function pref(key, fallback) {
+  const v = profile.data?.[key];
+  return v === undefined ? fallback : v;
+}
+
+function setPref(key, value) {
+  profile.data[key] = value;
+  if (profile.guest) return; // guest: session memory only, nothing persists
+  profile.dirty.add(key);
+  try { localStorage.setItem(profileCacheKey(profile.slug), JSON.stringify(profile.data)); } catch { /* ignore */ }
+  schedulePrefsFlush();
+}
+
+/* Write-through sync: only keys this session actually changed overwrite the
+   remote copy, so two devices on one profile can't clobber each other. */
+let prefsFlushTimer = null;
+
+function schedulePrefsFlush(soon) {
+  if (profile.guest) return;
+  clearTimeout(prefsFlushTimer);
+  prefsFlushTimer = setTimeout(flushPrefs, soon ? 50 : 800);
+}
+
+async function flushPrefs() {
+  if (profile.guest || !profile.slug) return;
+  const slug = profile.slug;
+  const changed = [...profile.dirty];
+  profile.dirty = new Set();
+  try {
+    let remote = {};
+    try {
+      const rows = await sb(`prefs?profile=eq.${encodeURIComponent(slug)}&select=data`);
+      remote = rows[0]?.data || {};
+    } catch { /* first write or offline — send what we have */ }
+    const merged = { ...remote };
+    for (const k of changed) merged[k] = profile.data[k];
+    merged.name = profile.name;
+    merged.color = profile.color;
+    if (!merged.createdAt) merged.createdAt = profile.data.createdAt || new Date().toISOString().slice(0, 10);
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/prefs`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
+                 "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
+      body: JSON.stringify({ profile: slug, data: merged, updated_at: new Date().toISOString() }),
+    });
+    if (!res.ok) throw new Error(`prefs ${res.status}`);
+    // adopt remote keys we didn't have, but keep anything edited mid-flight
+    const result = { ...merged };
+    for (const k of profile.dirty) result[k] = profile.data[k];
+    profile.data = result;
+    try { localStorage.setItem(profileCacheKey(slug), JSON.stringify(profile.data)); } catch { /* ignore */ }
+  } catch {
+    for (const k of changed) profile.dirty.add(k); // retry on the next write
+  }
+}
+
+function paintAvatar() {
+  const btn = $("profile-btn");
+  if (!btn) return;
+  const av = $("profile-avatar");
+  av.textContent = (profile.name || "?").trim().charAt(0).toUpperCase();
+  av.style.background = profile.guest ? "transparent" : (profile.color || "#8a94a0");
+  av.classList.toggle("guest", profile.guest);
+  btn.hidden = false;
+}
+
+function timeGreeting(name) {
+  const h = new Date().getHours();
+  const part = h < 5 ? "Up late" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+  return `${part}, ${name}`;
+}
+
+function slugifyName(name) {
+  return name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/* The picker. gate=true on first launch (no way back); gate=false when
+   switching readers from the masthead avatar (cancellable, restarts clean). */
+async function showProfilePicker(gate) {
+  const overlay = $("profiles");
+  overlay.innerHTML = "";
+  overlay.hidden = false;
+  document.body.classList.add("profiles-open");
+
+  const inner = document.createElement("div");
+  inner.className = "profiles-inner";
+  overlay.appendChild(inner);
+
+  const word = document.createElement("div");
+  word.className = "profiles-word";
+  word.textContent = "Real Estate Briefing";
+  inner.appendChild(word);
+
+  const title = document.createElement("h2");
+  title.className = "profiles-title";
+  title.textContent = gate ? "Who's reading?" : "Switch reader";
+  inner.appendChild(title);
+
+  const grid = document.createElement("div");
+  grid.className = "profiles-grid";
+  inner.appendChild(grid);
+
+  const closePicker = () => {
+    overlay.classList.add("leaving");
+    setTimeout(() => {
+      overlay.hidden = true;
+      overlay.classList.remove("leaving");
+      document.body.classList.remove("profiles-open");
+    }, 380);
+  };
+
+  const finish = async (slug, meta) => {
+    if (!gate) {
+      if (slug === profile.slug) { closePicker(); return; }
+      // switching readers: make sure the row exists (with its proper name and
+      // color) BEFORE restarting, so the reboot finds the right identity
+      if (slug === "guest") {
+        try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
+      } else {
+        await activateProfile(slug, meta);
+        await flushPrefs();
+      }
+      location.reload();
+      return;
+    }
+    await activateProfile(slug, meta);
+    closePicker();
+    init();
+    if (!profile.guest) flashToast(timeGreeting(profile.name));
+  };
+
+  const pick = (card, slug, meta) => {
+    grid.classList.add("chosen");
+    card.classList.add("picked");
+    setTimeout(() => finish(slug, meta), 420);
+  };
+
+  const card = (p, i) => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "profile-card";
+    el.style.animationDelay = `${60 + i * 55}ms`;
+    const disc = document.createElement("span");
+    disc.className = "profile-disc";
+    disc.style.background = `linear-gradient(160deg, ${p.color} 0%, ${p.color} 55%, rgba(0,0,0,0.28) 160%)`;
+    disc.textContent = p.name.trim().charAt(0).toUpperCase();
+    el.appendChild(disc);
+    const nm = document.createElement("span");
+    nm.className = "profile-name";
+    nm.textContent = p.name;
+    el.appendChild(nm);
+    if (!gate && p.slug === profile.slug) {
+      el.classList.add("current");
+      const now = document.createElement("span");
+      now.className = "profile-now";
+      now.textContent = "reading now";
+      el.appendChild(now);
+    }
+    el.addEventListener("click", () => pick(el, p.slug, p));
+    return el;
+  };
+
+  const roster = profileRoster(await fetchProfileRows());
+  let i = 0;
+  for (const p of roster) grid.appendChild(card(p, i++));
+
+  // + new reader
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "profile-card";
+  add.style.animationDelay = `${60 + i++ * 55}ms`;
+  add.innerHTML = `<span class="profile-disc new">+</span><span class="profile-name">New</span>`;
+  add.addEventListener("click", () => {
+    const used = new Set(roster.map((r) => r.color));
+    const freshColor = PROFILE_COLORS.find((c) => !used.has(c)) || PROFILE_COLORS[roster.length % PROFILE_COLORS.length];
+    renderCreateForm(inner, grid, freshColor, (slug, meta) => finish(slug, meta), roster);
+  });
+  grid.appendChild(add);
+
+  // guest — nothing saves, for showing the app around
+  const guest = document.createElement("button");
+  guest.type = "button";
+  guest.className = "profiles-guest";
+  guest.innerHTML = `Browse as guest<span>nothing is saved</span>`;
+  guest.addEventListener("click", () => finish("guest"));
+  inner.appendChild(guest);
+
+  if (!gate) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "profiles-cancel";
+    cancel.textContent = "Back to the briefing";
+    cancel.addEventListener("click", closePicker);
+    inner.appendChild(cancel);
+  }
+}
+
+function renderCreateForm(inner, grid, freshColor, done, roster) {
+  grid.hidden = true;
+  const guestBtn = inner.querySelector(".profiles-guest");
+  if (guestBtn) guestBtn.hidden = true;
+  const title = inner.querySelector(".profiles-title");
+  if (title) title.textContent = "New reader";
+
+  const form = document.createElement("div");
+  form.className = "profile-create";
+
+  const preview = document.createElement("span");
+  preview.className = "profile-disc preview";
+  preview.textContent = "?";
+  let color = freshColor;
+  const paintPreview = (name) => {
+    preview.style.background = `linear-gradient(160deg, ${color} 0%, ${color} 55%, rgba(0,0,0,0.28) 160%)`;
+    preview.textContent = (name || "?").trim().charAt(0).toUpperCase() || "?";
+  };
+  paintPreview("");
+  form.appendChild(preview);
+
+  const input = document.createElement("input");
+  input.className = "profile-input";
+  input.type = "text";
+  input.maxLength = 24;
+  input.placeholder = "Your name";
+  input.autocapitalize = "words";
+  form.appendChild(input);
+
+  const swatches = document.createElement("div");
+  swatches.className = "profile-swatches";
+  for (const c of PROFILE_COLORS) {
+    const s = document.createElement("button");
+    s.type = "button";
+    s.className = "profile-swatch" + (c === color ? " on" : "");
+    s.style.background = c;
+    s.setAttribute("aria-label", "Pick color");
+    s.addEventListener("click", () => {
+      color = c;
+      swatches.querySelectorAll(".on").forEach((el) => el.classList.remove("on"));
+      s.classList.add("on");
+      paintPreview(input.value);
+    });
+    swatches.appendChild(s);
+  }
+  form.appendChild(swatches);
+
+  const go = document.createElement("button");
+  go.type = "button";
+  go.className = "profile-go";
+  go.textContent = "Start reading";
+  form.appendChild(go);
+
+  inner.appendChild(form);
+  const cancel = inner.querySelector(".profiles-cancel");
+  if (cancel) inner.appendChild(cancel); // escape hatch reads best under the form
+  input.addEventListener("input", () => paintPreview(input.value));
+  input.focus();
+
+  const submit = () => {
+    const name = input.value.trim();
+    if (!name) { input.focus(); return; }
+    let slug = slugifyName(name) || "reader";
+    const taken = new Set(roster.map((r) => r.slug));
+    let n = 2;
+    while (taken.has(slug)) slug = `${slugifyName(name)}-${n++}`;
+    done(slug, { name, color });
+  };
+  go.addEventListener("click", submit);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+}
+
 /* ---------- passcode lock ----------
    Deterrence for a public URL, not real data security (the Supabase read key
    ships in this file). A correct entry sets a localStorage flag so the device
@@ -2854,7 +3205,10 @@ function bootApp() {
   const lock = $("lock");
   if (lock) lock.remove();
   document.body.classList.add("unlocked");
-  init();
+  // the reader gate: remembered profiles boot straight in; first visits pick
+  const slug = rememberedProfile();
+  if (slug) activateProfile(slug).catch(() => {}).then(init);
+  else showProfilePicker(true);
 }
 
 /* While the lock is up, block trackpad/mouse pinch-zoom (Ctrl/Cmd+wheel on

@@ -8,7 +8,7 @@
   <title>Real Estate Briefing</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗞️</text></svg>">
   <!-- installable PWA: manifest + iOS home-screen chrome; sw.js caches the app shell for offline -->
-  <link rel="manifest" href="manifest.webmanifest?v=27">
+  <link rel="manifest" href="manifest.webmanifest?v=28">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Briefing">
@@ -21,7 +21,7 @@
   }catch(e){}</script>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <!-- bump ?v= on every deploy so cached pages can never pair old code with new data -->
-  <link rel="stylesheet" href="css/style.css?v=27">
+  <link rel="stylesheet" href="css/style.css?v=28">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 </head>
 <body>
@@ -49,6 +49,9 @@
     </div>
   </div>
 
+  <!-- reader profiles overlay (rendered by JS; gates first launch, reopens to switch) -->
+  <div id="profiles" class="profiles" hidden></div>
+
   <header class="masthead">
     <div class="masthead-row">
       <a class="wordmark" href="#/">Real Estate&nbsp;Briefing</a>
@@ -58,6 +61,9 @@
           <a id="current-date" href="#/history" aria-label="View briefing history"></a>
           <button id="next-day" class="nav-arrow" aria-label="Next day">›</button>
         </nav>
+        <button id="profile-btn" class="icon-btn profile-btn" aria-label="Switch reader" title="Switch reader" hidden>
+          <span id="profile-avatar" class="profile-avatar">?</span>
+        </button>
         <button id="search-btn" class="icon-btn" aria-label="Search" title="Search">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="11" cy="11" r="7"></circle>
@@ -181,11 +187,11 @@
 
   <div id="toast" role="status"></div>
 
-  <script src="js/app.js?v=27"></script>
+  <script src="js/app.js?v=28"></script>
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js?v=27').catch(function () {});
+        navigator.serviceWorker.register('sw.js?v=28').catch(function () {});
       });
     }
   </script>

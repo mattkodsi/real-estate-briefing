@@ -9,7 +9,7 @@ Static site (no build step): `index.html` + `css/style.css` + `js/app.js`, pipel
 
 ## Architecture
 
-1. Scheduled cloud routines on claude.ai (windows: 7:30, 8:00, 8:30, 9:00, 10:00 AM, 12:00, 2:00, 4:00 PM ET; hardware-independent — they run in Anthropic's cloud against this repo) read the day's real estate newsletters from Gmail, synthesizes ONE deduped story list, fetches full article text, geocodes deal locations, writes `data/YYYY-MM-DD.json`, updates the rolling week file `data/weeks/<monday>.json`, maintains `data/index.json` (`{dates: [], weeks: []}`), then **publishes with `python3 scripts/push_data.py`** (upserts days + weeks + players + terms to Supabase). Runs are idempotent: each rebuilds today's file from ALL of today's emails (`after:` today, America/New_York — not `newer_than:1d`), keeping existing story ids stable.
+1. Scheduled cloud routines on claude.ai (windows: 7:30, 8:00, 8:30, 9:00, 10:00 AM, 12:00, 2:00, 4:00 PM ET; hardware-independent — they run in Anthropic's cloud against this repo) read the day's real estate newsletters from Gmail, synthesizes ONE deduped story list, fetches full article text, geocodes deal locations, writes `data/YYYY-MM-DD.json`, updates the rolling week file `data/weeks/<monday>.json`, maintains `data/index.json` (`{dates: [], weeks: []}`), then **publishes with `python3 scripts/push_data.py`** (upserts days + weeks + players + terms + threads + events + metrics to Supabase). Runs are idempotent: each rebuilds today's file from ALL of today's emails (`after:` today, America/New_York — not `newer_than:1d`), keeping existing story ids stable.
 2. The app has six hash-routed views — Briefing (`#/day/DATE`), Map (`#/map`), Weekly (`#/weekly`), Players (`#/players`, profiles at `#/player/SLUG`), Dictionary (`#/dictionary`, entries at `#/term/SLUG`), Rates (`#/rates`) — plus History (`#/history`, reached by tapping the masthead date, not a tab) and a full-screen reader overlay (`#/story/DATE/ID`). A masthead refresh button (and auto-refetch every 10 min / on tab focus) re-queries Supabase and re-renders when `generatedAt` changes; pulling NEW emails always happens through a task run, not the page.
 
 ## Newsletter sources (Gmail senders)
@@ -81,8 +81,24 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
     - **One slug per concept, forever.** Check for aliases before creating (e.g. "Cap Rate" vs "Capitalization Rate"). Never re-slug.
     - **Aliases** (`aliases` field): alternate names/abbreviations the app auto-links wherever they appear in prose — e.g. "DSCR" for "Debt Service Coverage Ratio". Keep them unambiguous.
     - **Category** (`category` field): a short reusable label — Valuation & Returns, Financing & Debt, Legal & Regulatory, Deal Structures, Market Mechanics, Tax — reuse existing ones before inventing.
+10b. **Threads**: maintain the persistent story-arc registry (cross-day continuity the app renders as timelines). Fetch current threads from Supabase (`GET <SUPABASE_URL>/rest/v1/threads?select=slug,data` with the `apikey` header), link today's stories, write the complete result to `data/threads.json` (schema below). Linking is strictly evidence-gated — **a thread is a shared concrete anchor, never a vibe**:
+    - **The five valid anchors (the ONLY five):** (1) **same property/site** — same address or same pinned location; (2) **same transaction lifecycle** — announced → financed → closed → resold, same parties and asset; (3) **same legal case** — same litigation, same parties; (4) **same company/fund event** — ONE bankruptcy, ONE fund collapse, ONE merger (not "more news about the same company"); (5) **event → resolution** — a dated catalyst from the events registry (step 10c) and the story reporting its outcome.
+    - **Banned as link bases:** thematic similarity ("both are office distress"), same sector, same market, same player appearing in unrelated deals. If the anchor can't be stated in one concrete phrase, the link does not exist. Precision over recall: a missed link is harmless, a false link poisons the feature.
+    - Every entry carries `why` — the anchor phrase shown to the reader ("same property: 111 Wall St", "resolves: July 22 UCC auction"). If you can't write that phrase, don't link.
+    - Create a thread only at the SECOND qualifying story (a thread of one is not a thread). When a thread is created or extended, set each linked story's `thread` field to the thread slug — including patching the earlier days' stories (refetch those days, set the field, re-push).
+    - `status`: `active` until the arc concretely concludes (deal closed, case settled/dismissed, resolution reported) → `resolved`. Nothing else; the app derives dormancy from `lastSeen`.
+    - Threads are permanent — never delete a thread or an entry; one slug per arc, forever (same no-DELETE guarantee as `players`).
+10c. **Calendar events**: maintain the events registry — **automatically compile EVERY concrete dated future event** mentioned in today's stories, no curation: auctions, court dates/trials, policy votes/deadlines/effective dates, Fed meetings, scheduled data releases, loan maturities with stated dates, scheduled groundbreakings/openings/closings. Fetch current events (`GET <SUPABASE_URL>/rest/v1/events?select=id,data`), merge, write `data/events.json` (schema below). Rules:
+    - Only real dated events: a specific day, or an unambiguous month (store the 1st with `"approx": "month"`). Vague timing ("later this year", "expected soon") never enters.
+    - `id` = `YYYY-MM-DD-short-kebab-title`. Check whether the same event already exists under a slightly different title before creating; a repeat mention appends to `announcedBy` instead of duplicating.
+    - When a later story reports the outcome, set `resolvedBy` (`{day, id, outcome}` — outcome ≤20 words). An announced↔resolved pair is also thread anchor #5 (step 10b). Past events with no resolution stay as-is — silence is itself information.
+    - Events are permanent, never deleted. (The day's `watch` array stays what it is — the 1–3 headline catalysts; the events registry is the exhaustive layer underneath.)
+10d. **Metrics harvest**: capture every **industry metric a story cites** into the metrics ledger — the numbers the trade press quotes from the paid data shops: CMBS delinquency / special-servicing rates (Trepp), vacancy / absorption / asking rents (CBRE, JLL, Colliers, Cushman prints), price indices (Green Street CPPI, RCA/MSCI), cap-rate surveys, national rent indices (Zillow, Apartment List, Yardi), housing prints (Case-Shiller, NAR sales), lending-standards surveys (SLOOS). Fetch current metrics (`GET <SUPABASE_URL>/rest/v1/metrics?select=id,data`), merge, write `data/metrics.json` (schema below). Rules:
+    - Only stated figures WITH an attributable source: "office CMBS delinquency hit 11.1%, per Trepp" → metric `cmbs-delinquency-office`, value 11.1, unit `%`, source Trepp. No figure or no source → skip.
+    - Skip single-deal numbers (that's `valueUsd`) and one-off anecdotes; this ledger is for recurring market-level series only.
+    - One entry per metric slug, forever; append to `series` (skip exact duplicates of the same print). `asOf` = the period the figure describes when stated, else the story date. Scope geography/asset in the slug (`office-vacancy-manhattan`, `rent-growth-national`) — reuse existing slugs before inventing near-duplicates.
 11. Validate all written files with `python3 -m json.tool`.
-12. **Publish**: `python3 scripts/push_data.py` — upserts every local day and week file plus `data/players.json` and `data/terms.json` to Supabase. The hosted app updates within seconds (no deploy involved).
+12. **Publish**: `python3 scripts/push_data.py` — upserts every local day and week file plus `data/players.json`, `data/terms.json`, and (when present) `data/threads.json` / `data/events.json` / `data/metrics.json` to Supabase. The hosted app updates within seconds (no deploy involved).
 13. **Rates**: **Rates are maintained server-side and need no action from the routine.** A Supabase `pg_cron` job (`rates-heartbeat`, every 30 min) calls the `rates-live` edge function, which fetches the Treasury curve + SOFR from *Supabase's* network (clean egress) and refreshes `rates_cache` — what the app's Rates page and masthead actually read. This is fully independent of the routine's own egress. You MAY run `python3 scripts/fetch_rates.py` as a redundant belt-and-suspenders, but **a failure is expected and non-fatal in sandboxes that block all outbound HTTP (including *.supabase.co) — do NOT record it in the day's `notes`.** The site's rates stay fresh regardless. (Only worth flagging if the app itself shows stale rates, which would mean the edge function or heartbeat is down — a separate infra issue, not a routine failure.)
 
 ## Notifications (every run, every window)
@@ -124,6 +140,7 @@ The test: *would the user, opening the app, see something new?* If no, finish si
       "publisher": "real publisher's display name when the item points to ANOTHER outlet (common in CRE Daily roundups, which credit e.g. CommercialSearch, Multi-Housing News, The Wall Street Journal) — read it from the blurb's attribution so the app credits the true source, not the newsletter; omit when the newsletter itself is the publisher",
       "sourceBlocked": "set by fill_content.py only — true when full text lives at a source that couldn't be fetched; the app then turns the card into a tap-through to that source (do not set by hand)",
       "brief": "true for sub-budget one-liners (see step 4) — the app renders them in the 'Also today' strip, not as cards; omit for full stories",
+      "thread": "slug of the registered thread this story belongs to (set by step 10b when an evidence-gated link exists); omit otherwise",
       "coverage": [{ "publisher": "other outlet's display name", "url": "their version's URL", "title": "their headline", "content": "their sanitized article HTML or null", "note": "≤10 words on what this take adds, or null" }],
       "image": "hero image URL or null",
       "locations": [{ "label": "human-readable place", "lat": 0.0, "lng": 0.0 }],
@@ -203,6 +220,76 @@ The whole dictionary in one file; `push_data.py` upserts each entry as its own `
   }
 }
 ```
+
+## Data schema — `data/threads.json`
+
+The whole registry in one file; `push_data.py` upserts each entry as its own `threads` row. See step 10b for the linking rules (five hard anchors, nothing else).
+
+```json
+{
+  "generatedAt": "ISO-8601 UTC",
+  "threads": {
+    "111-wall-street": {
+      "title": "short arc name ('111 Wall Street', 'S2 Capital fund collapse')",
+      "type": "property | transaction | litigation | company | event",
+      "anchor": "one concrete phrase naming the shared spine — the thread's reason to exist",
+      "status": "active | resolved",
+      "entries": [
+        { "date": "YYYY-MM-DD", "id": "story id in that day file", "title": "story headline", "delta": "≤15 words: what this installment changed", "why": "anchor phrase for THIS link, e.g. 'same property: 111 Wall St'" }
+      ],
+      "createdAt": "YYYY-MM-DD",
+      "lastSeen": "YYYY-MM-DD"
+    }
+  }
+}
+```
+
+Entries newest-first (same convention as player mentions); the app reverses for timeline display.
+
+## Data schema — `data/events.json`
+
+The whole registry in one file; `push_data.py` upserts each entry as its own `events` row. See step 10c — every concrete dated event, compiled automatically.
+
+```json
+{
+  "generatedAt": "ISO-8601 UTC",
+  "events": {
+    "2026-08-13-fed-rate-decision": {
+      "date": "YYYY-MM-DD (the event's date; for month-precision use the 1st)",
+      "approx": "day | month",
+      "title": "short event name ('S2 North Texas foreclosure auctions', 'FARE Act effective date')",
+      "type": "auction | court | policy | fed | data | deadline | opening | other",
+      "market": "same labels as stories, or National",
+      "announcedBy": [{ "day": "YYYY-MM-DD", "id": "story id" }],
+      "resolvedBy": { "day": "YYYY-MM-DD", "id": "story id", "outcome": "≤20 words on what happened" }
+    }
+  }
+}
+```
+
+`resolvedBy` is null/omitted until an outcome story arrives.
+
+## Data schema — `data/metrics.json`
+
+The whole ledger in one file; `push_data.py` upserts each entry as its own `metrics` row. See step 10d — cited industry figures only, with their sources.
+
+```json
+{
+  "generatedAt": "ISO-8601 UTC",
+  "metrics": {
+    "cmbs-delinquency-office": {
+      "name": "Office CMBS delinquency",
+      "unit": "% | $ | bps | index | count",
+      "geography": "National | Manhattan | ... (same labels as story markets)",
+      "series": [
+        { "asOf": "YYYY-MM-DD (period the figure describes)", "value": 11.1, "source": "Trepp", "day": "YYYY-MM-DD (story's day)", "id": "story id" }
+      ]
+    }
+  }
+}
+```
+
+Series in chronological order; append-only.
 
 ## Writing style
 
