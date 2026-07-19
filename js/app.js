@@ -4187,7 +4187,9 @@ async function shareStoryCard(story, date) {
   const file = new File([blob], `${story.id}.png`, { type: "image/png" });
   try {
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: story.title });
+      // files ONLY — iOS Messages drops the attachment if a title/text
+      // rides along with it (WebKit quirk)
+      await navigator.share({ files: [file] });
       return;
     }
   } catch (e) {
