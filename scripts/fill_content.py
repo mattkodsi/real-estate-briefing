@@ -166,6 +166,8 @@ def _try_story(s: dict) -> tuple[str, object]:
         if not s.get("image") and res.get("image"):
             s["image"] = res["image"]
         return "filled", res["words"]
+    if res.get("notFound"):
+        return "failed", "404 at source — the story's url looks wrong (never guess urls; use the email's link)"
     if res.get("paywalled"):
         return "paywalled", None
     if res.get("blocked"):

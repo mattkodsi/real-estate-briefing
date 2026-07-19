@@ -253,9 +253,14 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
         "words": words,
         "finalUrl": final_url,  # after redirects — the real publisher's page
     }
-    # a short TRD result usually means the session cookie is missing/expired —
-    # surface it so the pipeline can flag it in the day's notes
-    if is_trd and not out["ok"]:
+    # a dead link is not a paywall: a 404 page reached via the proxy also comes
+    # back short, and blaming the session sends the owner chasing cookies
+    low = html.lower()
+    if not out["ok"] and ("page not found" in low[:8000] or "error-404" in low[:8000]):
+        out["notFound"] = True
+    # a short TRD result otherwise usually means the session cookie is
+    # missing/expired — surface it so the pipeline can flag it in the day's notes
+    elif is_trd and not out["ok"]:
         out["paywalled"] = True
     # distinguish "hit a bot wall" (transient, worth retrying) from a genuinely
     # empty/short article, so callers report it honestly instead of "0 words"
