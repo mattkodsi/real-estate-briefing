@@ -8,13 +8,13 @@
   <title>Real Estate Briefing</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗞️</text></svg>">
   <!-- installable PWA: manifest + iOS home-screen chrome; sw.js caches the app shell for offline -->
-  <link rel="manifest" href="manifest.webmanifest?v=56">
+  <link rel="manifest" href="manifest.webmanifest?v=57">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Briefing">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <!-- bump ?v= on every deploy so cached pages can never pair old code with new data -->
-  <link rel="stylesheet" href="css/style.css?v=56">
+  <link rel="stylesheet" href="css/style.css?v=57">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 </head>
 <body>
@@ -170,12 +170,15 @@
             <path d="M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"></path>
           </svg>
         </button>
+        <button id="reader-listen" class="reader-listen" aria-label="Listen to this story" title="Listen">🔊</button>
         <button id="reader-size" class="reader-size" aria-label="Text size" title="Text size">Aa</button>
         <button id="reader-save" class="reader-save" aria-label="Save story" title="Save story">☆</button>
         <a id="reader-original" href="#" target="_blank" rel="noopener">Original ↗</a>
       </div>
     </div>
     <div id="reader-progress" class="reader-progress" hidden></div>
+    <div id="reader-flash" class="reader-flash" hidden></div>
+    <div id="reader-timeleft" class="reader-timeleft" hidden></div>
     <article class="reader-article">
       <p class="reader-kicker" id="reader-kicker"></p>
       <h1 id="reader-title"></h1>
@@ -219,7 +222,7 @@
 
   <div id="toast" role="status"></div>
 
-  <script src="js/app.js?v=56"></script>
+  <script src="js/app.js?v=57"></script>
   <script>
     if ('serviceWorker' in navigator) {
       // Auto-update: reload once the instant a new service worker takes control,
@@ -236,7 +239,7 @@
         });
       }
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js?v=56').then(function (reg) {
+        navigator.serviceWorker.register('sw.js?v=57').then(function (reg) {
           reg.update(); // check for a newer version right now…
           document.addEventListener('visibilitychange', function () {
             // …and every time the app is reopened or refocused

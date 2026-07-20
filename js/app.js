@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v56";
+const APP_VERSION = "v57";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 
@@ -217,7 +217,65 @@ async function init() {
     const dy = e.changedTouches[0].clientY - swipeStart.y;
     swipeStart = null;
     if (Math.abs(dx) > 70 && Math.abs(dy) < 60) readerStep(dx < 0 ? 1 : -1);
+    // pull down from the top to close the reader (universal, any content)
+    else if (dy > 110 && Math.abs(dx) < 70 && reader.scrollTop <= 2) closeReaderNav();
   }, { passive: true });
+  // scroll memory + "~N min left"
+  reader.addEventListener("scroll", onReaderScroll, { passive: true });
+  // TTS playback of the open story
+  $("reader-listen").addEventListener("click", toggleTTS);
+
+  // feed card gestures: swipe right = save ★, swipe left = mark read;
+  // long-press = peek preview without opening. Vertical drags stay scrolls.
+  const feed = $("feed");
+  let ft = null;
+  feed.addEventListener("touchstart", (e) => {
+    const card = e.target.closest(".story[data-id]");
+    if (!card || e.touches.length !== 1) { ft = null; return; }
+    const t = e.touches[0];
+    ft = { card, x: t.clientX, y: t.clientY, dx: 0, horiz: false, moved: false, longpressed: false };
+    ft.timer = setTimeout(() => {
+      if (ft && !ft.moved) { ft.longpressed = true; openStoryPeek(card.dataset.date, card.dataset.id); }
+    }, 500);
+  }, { passive: true });
+  feed.addEventListener("touchmove", (e) => {
+    if (!ft) return;
+    const t = e.touches[0];
+    const dx = t.clientX - ft.x, dy = t.clientY - ft.y;
+    if (!ft.horiz && !ft.moved && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      ft.moved = true; clearTimeout(ft.timer);
+      ft.horiz = Math.abs(dx) > Math.abs(dy);
+    }
+    if (ft.horiz) {
+      e.preventDefault();
+      ft.dx = dx;
+      ft.card.style.transition = "none";
+      ft.card.style.transform = `translateX(${dx}px)`;
+      ft.card.classList.toggle("swipe-save", dx > 45);
+      ft.card.classList.toggle("swipe-read", dx < -45);
+    }
+  }, { passive: false });
+  const endFeed = () => {
+    if (!ft) return;
+    clearTimeout(ft.timer);
+    const { card, dx, horiz, longpressed } = ft;
+    card.style.transition = "transform .2s ease";
+    card.style.transform = "";
+    card.classList.remove("swipe-save", "swipe-read");
+    if (horiz && Math.abs(dx) > 90) {
+      const date = card.dataset.date, id = card.dataset.id;
+      if (dx > 0) {
+        const story = (state.days.get(date)?.stories || []).find((s) => s.id === id);
+        if (story) flashToast(toggleSaved(story, date) ? "Saved ★" : "Removed");
+      } else {
+        setRead(date, id, true); card.classList.add("is-read"); flashToast("Marked read");
+      }
+    }
+    if (horiz || longpressed) suppressNextClick();
+    ft = null;
+  };
+  feed.addEventListener("touchend", endFeed);
+  feed.addEventListener("touchcancel", endFeed);
 
   // share the open story as a typographic image card
   $("reader-share").addEventListener("click", () => {
@@ -817,8 +875,11 @@ function storyRow(story, date, lead) {
   const el = document.createElement(expandable ? "button" : "div");
   el.className = "story" + (lead ? " lead" : "")
     + (expandable || blockedSource ? "" : " static")
-    + (blockedSource ? " redirect" : "");
+    + (blockedSource ? " redirect" : "")
+    + (expandable && isRead(date, story.id) ? " is-read" : "");
   if (expandable) {
+    el.dataset.date = date;      // for swipe / long-press gestures + read dimming
+    el.dataset.id = story.id;
     el.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
   } else if (blockedSource) {
     el.addEventListener("click", (e) => {
@@ -1416,6 +1477,17 @@ function toggleSaved(story, date) {
   else list.unshift({ key, date, id: story.id, title: story.title, section: story.section || null, market: story.market || null });
   setSavedList(list);
   return i < 0; // true if now saved
+}
+
+/* ---------- read-state (per profile): dims cards you've read; set by opening a
+   story or swiping a feed row left ---------- */
+function readMark(date, id) { return date + "/" + id; }
+function isRead(date, id) { return (pref("read", []) || []).includes(readMark(date, id)); }
+function setRead(date, id, on) {
+  const set = new Set(pref("read", []) || []);
+  const k = readMark(date, id);
+  if (on) set.add(k); else set.delete(k);
+  setPref("read", [...set].slice(-800)); // cap so the list can't grow forever
 }
 
 /* ---------- search ---------- */
@@ -3089,6 +3161,7 @@ function readerStep(delta) {
     flashToast(delta > 0 ? "That's the whole briefing ✓" : "Start of the briefing");
     return;
   }
+  readerStepFlash = true; // let openReaderRoute show the section interstitial if it changes
   readerGo(nav.date, next.id);
   flashToast(`${next.section ? next.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`);
 }
@@ -3112,20 +3185,40 @@ function renderReaderNext() {
   const box = $("reader-next");
   box.innerHTML = "";
   const nav = state.readerNav;
-  const next = nav && nav.idx >= 0 ? nav.list[nav.idx + 1] : null;
-  if (!next) { box.hidden = true; return; }
+  if (!nav || nav.idx < 0) { box.hidden = true; return; }
+  const next = nav.list[nav.idx + 1];
   box.hidden = false;
-  const btn = document.createElement("button");
-  btn.className = "reader-next-card";
-  const k = document.createElement("span");
-  k.className = "rn-kicker";
-  k.textContent = "Next" + (next.section ? " · " + next.section : "");
-  const t = document.createElement("span");
-  t.className = "rn-title";
-  t.textContent = next.title;
-  btn.append(k, t);
-  btn.addEventListener("click", () => readerGo(nav.date, next.id));
-  box.appendChild(btn);
+
+  if (next) {
+    const btn = document.createElement("button");
+    btn.className = "reader-next-card";
+    const k = document.createElement("span");
+    k.className = "rn-kicker";
+    k.textContent = "Next" + (next.section ? " · " + next.section : "");
+    const t = document.createElement("span");
+    t.className = "rn-title";
+    t.textContent = next.title;
+    btn.append(k, t);
+    btn.addEventListener("click", () => readerGo(nav.date, next.id));
+    box.appendChild(btn);
+  } else {
+    // end of the feed — the ritual gets a finish line
+    const mins = nav.list.reduce((sum, s) => sum + (readMinutes(s) || 0), 0);
+    const card = document.createElement("div");
+    card.className = "reader-done";
+    const h = document.createElement("div");
+    h.className = "rd-head";
+    h.textContent = "You're caught up ✓";
+    const m = document.createElement("div");
+    m.className = "rd-meta";
+    m.textContent = `${nav.list.length} ${nav.list.length === 1 ? "story" : "stories"}${mins ? ` · ${mins} min` : ""}`;
+    const back = document.createElement("button");
+    back.className = "rd-back";
+    back.textContent = "Back to the briefing";
+    back.addEventListener("click", () => closeReaderNav());
+    card.append(h, m, back);
+    box.appendChild(card);
+  }
 }
 
 function applyTextScale() {
@@ -3133,6 +3226,60 @@ function applyTextScale() {
   const r = $("reader");
   r.classList.toggle("size-s", sc === "s");
   r.classList.toggle("size-l", sc === "l");
+}
+
+/* ---------- reader polish: scroll memory, time-left, section flash, TTS ---------- */
+const readerScrollPos = {};             // date/id -> scrollTop (session memory)
+let readerPrevSection = null;           // section of the story we came from
+let readerStepFlash = false;            // set by readerStep so a fresh open doesn't flash
+let flashTimer = null;
+
+// remember scroll position and update "~N min left" as you read
+function onReaderScroll() {
+  const r = $("reader");
+  if (r.hidden || !state.reader) return;
+  readerScrollPos[readMark(state.reader.date, state.reader.story.id)] = r.scrollTop;
+  updateTimeLeft();
+}
+
+function updateTimeLeft() {
+  const el = $("reader-timeleft");
+  if (!el || !state.reader) return;
+  const total = readMinutes(state.reader.story) || 0;
+  const r = $("reader");
+  const max = r.scrollHeight - r.clientHeight;
+  const frac = max > 40 ? Math.min(1, r.scrollTop / max) : 1;
+  const left = Math.max(0, Math.round(total * (1 - frac)));
+  if (!total || frac > 0.92) { el.hidden = true; return; }
+  el.hidden = false;
+  el.textContent = left <= 0 ? "almost done" : `~${left} min left`;
+}
+
+// Web Speech playback of the open story
+let ttsOn = false;
+function paintListenBtn(on) {
+  ttsOn = on;
+  const b = $("reader-listen");
+  if (b) { b.textContent = on ? "⏸" : "🔊"; b.classList.toggle("on", on); }
+}
+function stopTTS() {
+  try { if (window.speechSynthesis) window.speechSynthesis.cancel(); } catch { /* unsupported */ }
+  ttsOn = false;
+}
+function toggleTTS() {
+  if (!("speechSynthesis" in window)) { flashToast("Listening isn't supported on this browser"); return; }
+  if (ttsOn) { stopTTS(); paintListenBtn(false); return; }
+  const s = state.reader?.story;
+  if (!s) return;
+  const bodyText = ($("reader-body").textContent || "").replace(/\s+/g, " ").trim();
+  const text = `${s.title}. ${s.summary || ""} ${bodyText}`.slice(0, 32000);
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.0;
+  u.onend = () => paintListenBtn(false);
+  u.onerror = () => paintListenBtn(false);
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(u);
+  paintListenBtn(true);
 }
 
 async function openReaderRoute(date, id) {
@@ -3231,10 +3378,31 @@ async function openReaderRoute(date, id) {
   renderReaderNext();
   applyTextScale();
 
+  // opening a story marks it read (dims its feed card); dim its progress seg too
+  setRead(date, story.id, true);
+
+  // section interstitial when a swipe crosses into a new section
+  const flash = $("reader-flash");
+  flash.hidden = true;
+  if (readerStepFlash && readerPrevSection && story.section && readerPrevSection !== story.section) {
+    flash.textContent = "— " + story.section + " —";
+    flash.hidden = false;
+    flash.classList.remove("show"); void flash.offsetWidth; flash.classList.add("show");
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => { flash.hidden = true; }, 700);
+  }
+  readerPrevSection = story.section || null;
+  readerStepFlash = false;
+
+  stopTTS(); // any prior playback ends when the story changes
+  paintListenBtn(false);
+
   const reader = $("reader");
   reader.hidden = false;
-  reader.scrollTop = 0;
   document.body.classList.add("reader-open");
+  // scroll-position memory: return to where you left this story, else the top
+  reader.scrollTop = readerScrollPos[readMark(date, story.id)] || 0;
+  updateTimeLeft();
 }
 
 /* ---------- multi-outlet coverage in the reader ----------
@@ -3342,6 +3510,8 @@ function showReaderVersion(story, date, idx) {
 function hideReader() {
   $("reader").hidden = true;
   document.body.classList.remove("reader-open");
+  stopTTS();
+  paintListenBtn(false);
 }
 
 /* ---------- mini-dossier sheets ----------
@@ -3366,6 +3536,46 @@ function closeSheet() {
 function sheetGo(hash) {
   closeSheet();
   location.hash = hash;
+}
+
+// swallow the tap that ends a swipe/long-press so the card doesn't also open
+function suppressNextClick() {
+  document.addEventListener("click", (e) => { e.stopPropagation(); e.preventDefault(); }, { capture: true, once: true });
+}
+
+// long-press peek: summary + hero in a sheet, without opening the full reader
+function openStoryPeek(date, id) {
+  const story = (state.days.get(date)?.stories || []).find((s) => s.id === id);
+  if (!story) return;
+  openSheet((card) => {
+    if (story.image) {
+      const fig = document.createElement("div");
+      fig.className = "peek-hero";
+      const img = document.createElement("img");
+      img.src = story.image; img.alt = "";
+      fig.appendChild(img);
+      card.appendChild(fig);
+    }
+    const k = document.createElement("div");
+    k.className = "peek-kicker";
+    k.textContent = [story.section, story.market].filter(Boolean).join(" · ");
+    const h = document.createElement("h3");
+    h.className = "peek-title";
+    h.textContent = story.title;
+    const p = document.createElement("p");
+    p.className = "peek-summary";
+    p.textContent = story.summary || "";
+    card.append(k, h, p);
+    const chips = storyChips(story);
+    if (chips) { chips.classList.add("peek-chips"); card.appendChild(chips); }
+    if (isExpandable(story)) {
+      const open = document.createElement("button");
+      open.className = "peek-open";
+      open.textContent = "Open story →";
+      open.addEventListener("click", () => sheetGo(`/story/${date}/${id}`));
+      card.appendChild(open);
+    }
+  });
 }
 
 async function openPlayerSheet(slug) {
