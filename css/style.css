@@ -2250,14 +2250,21 @@ button,
 .reader-listen.on { color: var(--accent); }
 
 /* section interstitial flashed on a swipe across a section boundary */
+/* section interstitial during swipe — a centered pill so it stays legible over
+   any hero photo (light or dark), not bare text that vanishes on bright images */
 .reader-flash {
-  position: fixed; top: 42%; left: 0; right: 0; z-index: 60;
-  text-align: center; pointer-events: none;
-  font-family: var(--serif); font-size: 20px; font-weight: 700;
-  letter-spacing: 0.02em; color: var(--ink);
-  opacity: 0; transition: opacity 0.18s ease;
+  position: fixed; top: 42%; left: 50%; z-index: 60;
+  transform: translate(-50%, -6px);
+  pointer-events: none; white-space: nowrap;
+  font-family: var(--serif); font-size: 17px; font-weight: 700;
+  letter-spacing: 0.03em; color: #fff;
+  padding: 9px 22px; border-radius: 999px;
+  background: rgba(16, 18, 20, 0.82);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  opacity: 0; transition: opacity 0.18s ease, transform 0.18s ease;
 }
-.reader-flash.show { opacity: 1; }
+.reader-flash.show { opacity: 1; transform: translate(-50%, 0); }
 
 /* "~N min left" pill, bottom-right while reading */
 .reader-timeleft {

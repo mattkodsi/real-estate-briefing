@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v73";
+const APP_VERSION = "v74";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -4547,7 +4547,7 @@ async function openReaderRoute(date, id) {
   const flash = $("reader-flash");
   flash.hidden = true;
   if (readerStepFlash && readerPrevSection && story.section && readerPrevSection !== story.section) {
-    flash.textContent = "— " + story.section + " —";
+    flash.textContent = story.section;
     flash.hidden = false;
     flash.classList.remove("show"); void flash.offsetWidth; flash.classList.add("show");
     clearTimeout(flashTimer);
@@ -6010,11 +6010,11 @@ function openReconnectSheet(site) {
     + '<p class="reconnect-lead">Once you’ve saved the key button below, reconnecting is two taps whenever a session lapses.</p>'
     + '<ol class="reconnect-steps">'
     + '<li><b>Sign in</b> to ' + site.label + '.<br><a class="reconnect-open" href="' + site.login + '" target="_blank" rel="noopener">Open ' + site.label + ' ↗</a></li>'
-    + '<li><b>Save this button</b> to your bookmarks/favorites (one time). On desktop drag it to the bookmarks bar; on a phone, use “Copy” below and paste it into a new bookmark’s URL.<br><a class="reconnect-bm" href="' + bmAttr + '">🔑 Reconnect ' + site.label + '</a></li>'
+    + '<li><b>Save this button</b> to your bookmarks/favorites (one time). On desktop drag it to the bookmarks bar; on a phone, use “Copy” below and paste it into a new bookmark’s URL.<br><a class="reconnect-bm" href="' + bmAttr + '">🔑 Reconnect</a></li>'
     + '<li>Back on ' + site.label + ' while signed in, <b>tap that saved bookmark</b>. You’ll see “Reconnected ✅”.</li>'
     + '</ol>'
     + '<button class="reconnect-copy">Copy the reconnect button</button>'
-    + '<p class="reconnect-note">No password is entered or stored — only your browser’s existing session cookie, sent to your own backend.</p>';
+    + '<p class="reconnect-note">One button covers every site — it reconnects whichever site you run it on (it reads the page’s address), so you only save it once. No password is entered or stored, only your browser’s existing session cookie.</p>';
   ov.appendChild(card);
   document.body.appendChild(ov);
   const close = () => ov.remove();
