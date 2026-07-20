@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v58";
+const APP_VERSION = "v59";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 
@@ -285,8 +285,8 @@ async function init() {
       ft.dx = dx;
       ft.card.style.transition = "none";
       ft.card.style.transform = `translateX(${dx}px)`;
-      ft.card.classList.toggle("swipe-save", dx > 45);
-      ft.card.classList.toggle("swipe-read", dx < -45);
+      ft.card.classList.toggle("swipe-read", dx > 45);
+      ft.card.classList.toggle("swipe-save", dx < -45);
     }
   }, { passive: false });
   const endFeed = (e) => {
@@ -299,7 +299,7 @@ async function init() {
     card.classList.remove("swipe-save", "swipe-read");
     if (horiz && Math.abs(dx) > 90) {
       const date = card.dataset.date, id = card.dataset.id;
-      if (dx > 0) {
+      if (dx < 0) {
         const story = (state.days.get(date)?.stories || []).find((s) => s.id === id);
         if (story) flashToast(toggleSaved(story, date) ? "Saved ★" : "Removed");
       } else {

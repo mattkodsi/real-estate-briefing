@@ -2196,8 +2196,8 @@ button,
 /* read-state: cards you've opened or marked read dim subtly */
 .story.is-read { opacity: 0.58; }
 /* swipe action hints (card translated inline via JS) */
-.story.swipe-save { box-shadow: inset 5px 0 0 -1px #d9a010; }
-.story.swipe-read { box-shadow: inset -5px 0 0 -1px var(--accent); }
+.story.swipe-save { box-shadow: inset -5px 0 0 -1px #d9a010; } /* save = swipe left */
+.story.swipe-read { box-shadow: inset 5px 0 0 -1px var(--accent); } /* read = swipe right */
 
 /* long-press peek sheet — fixed hero height so the sheet never reflows/jumps
    when the image finishes loading (that was the "photo resizes a second later") */
