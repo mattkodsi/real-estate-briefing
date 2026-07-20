@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v55";
+const APP_VERSION = "v56";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 
@@ -104,6 +104,7 @@ const state = {
   threads: null,       // story arcs (cross-day timelines)
   events: null,        // dated catalysts (the calendar)
   metrics: null,       // cited industry figures (market metrics)
+  compSort: "recent",  // comps sort: "recent" | "value" | "psf" | "punit"
   calView: "agenda",   // calendar layout: "agenda" | "month"
   calMonth: null,      // month shown in grid view (YYYY-MM)
   calDay: null,        // day selected in grid view (YYYY-MM-DD)
@@ -1616,22 +1617,69 @@ function ledgerRow(s) {
   return el;
 }
 
+function median(arr) {
+  if (!arr.length) return null;
+  const a = [...arr].sort((x, y) => x - y);
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+const compPsf = (s) => (s.sizeSqft ? s.valueUsd / s.sizeSqft : null);
+const compPunit = (s) => (s.units ? s.valueUsd / s.units : null);
+
+/* Median $/sf and $/unit over the currently-filtered comps — the numbers that
+   sharpen as more sized deals accumulate. Shown as stat tiles above the list. */
+function updateCompSummary(list) {
+  const el = $("comps-summary");
+  if (!el) return;
+  el.innerHTML = "";
+  const psfs = list.map(compPsf).filter((v) => v);
+  const punits = list.map(compPunit).filter((v) => v);
+  const msf = median(psfs), mu = median(punits);
+  const tiles = [
+    ["Priced deals", String(list.length), null],
+    ["Median $/sf", msf ? "$" + Math.round(msf).toLocaleString() : "—", psfs.length],
+    ["Median $/unit", mu ? "$" + Math.round(mu).toLocaleString() : "—", punits.length],
+  ];
+  for (const [label, val, n] of tiles) {
+    const d = document.createElement("div");
+    d.className = "comp-stat";
+    const v = document.createElement("div"); v.className = "cs-val"; v.textContent = val;
+    const l = document.createElement("div"); l.className = "cs-label";
+    l.textContent = label + (n != null ? ` · n=${n}` : "");
+    d.append(v, l);
+    el.appendChild(d);
+  }
+}
+
 function renderLedgerList(priced) {
   const box = $("ledger-list");
   if (!box) return;
   box.innerHTML = "";
   const f = state.trendFilters;
-  const list = priced.filter((s) =>
+  const filtered = priced.filter((s) =>
     (!f.market || s.market === f.market) &&
     (!f.asset || s.assetClass === f.asset) &&
     (!f.type || s.dealType === f.type)
   );
+  updateCompSummary(filtered); // medians reflect the filter, not the sort subset
+
+  // sort — $/sf and $/unit sorts also drop deals without that size
+  const sort = state.compSort || "recent";
+  let list = filtered;
+  if (sort === "value") list = [...filtered].sort((a, b) => b.valueUsd - a.valueUsd);
+  else if (sort === "psf") list = filtered.filter(compPsf).sort((a, b) => compPsf(b) - compPsf(a));
+  else if (sort === "punit") list = filtered.filter(compPunit).sort((a, b) => compPunit(b) - compPunit(a));
+  else list = [...filtered].sort((a, b) => b._date.localeCompare(a._date) || (b.valueUsd - a.valueUsd));
+
   const tally = $("ledger-tally");
-  if (tally) tally.textContent = `${list.length} of ${priced.length}`;
+  if (tally) tally.textContent = `${list.length} deal${list.length === 1 ? "" : "s"}`;
   if (!list.length) {
     const p = document.createElement("p");
     p.className = "trends-note";
-    p.textContent = "No priced deals match these filters.";
+    p.textContent = sort === "psf" ? "No filtered deals report a square footage yet."
+      : sort === "punit" ? "No filtered deals report a unit count yet."
+        : "No priced deals match these filters.";
     box.appendChild(p);
     return;
   }
@@ -1641,6 +1689,9 @@ function renderLedgerList(priced) {
 async function renderTrends() {
   const wrap = $("trends-content");
   wrap.innerHTML = "";
+
+  wrap.appendChild(pageHead("The Desk",
+    "The analytical layer — everything that sharpens as more coverage accumulates: market metrics, comps, momentum, and running arcs. Facts and medians, never coverage-biased sums."));
 
   // Always-present doors to the two views that have no tab of their own. Shown
   // even when their tables are empty, so the features are discoverable (they
@@ -1676,6 +1727,48 @@ async function renderTrends() {
       "As coverage cites market figures with a source — office CMBS delinquency (Trepp), vacancy and rents (CBRE/JLL), price indices (Green Street) — they collect here as tracked series."));
   }
 
+  /* --- Comps: every priced deal as a comps record, with median $/sf and $/unit
+         that sharpen as more sizes get reported. The headline analytical tool,
+         right under the metrics (was the buried 'Deal Ledger'). Sort by '$ high'
+         is the old Records list; there's no standalone Records section now. --- */
+  const priced = stories.filter((s) => s.valueUsd);
+  wrap.appendChild(subHead("Comps",
+    "Every priced deal, with $/sf and $/unit where a size was reported. Medians reflect the filters and sharpen as coverage grows."));
+  const summary = document.createElement("div");
+  summary.id = "comps-summary";
+  summary.className = "comps-summary";
+  wrap.appendChild(summary);
+
+  const bar = document.createElement("div");
+  bar.className = "ctl-row ledger-bar";
+  bar.appendChild(makeSelect("All markets", counts(priced, "market"), state.trendFilters.market, (v) => { state.trendFilters.market = v; renderLedgerList(priced); }));
+  bar.appendChild(makeSelect("All assets", counts(priced, "assetClass"), state.trendFilters.asset, (v) => { state.trendFilters.asset = v; renderLedgerList(priced); }));
+  bar.appendChild(makeSelect("All types", counts(priced, "dealType"), state.trendFilters.type, (v) => { state.trendFilters.type = v; renderLedgerList(priced); }));
+  wrap.appendChild(bar);
+
+  const sortBar = document.createElement("div");
+  sortBar.className = "comp-sortbar";
+  for (const [key, label] of [["recent", "Newest"], ["value", "$ high"], ["psf", "$/sf"], ["punit", "$/unit"]]) {
+    const b = document.createElement("button");
+    b.className = "comp-sort" + (state.compSort === key ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      state.compSort = key;
+      sortBar.querySelectorAll(".comp-sort").forEach((x) => x.classList.toggle("on", x === b));
+      renderLedgerList(priced);
+    });
+    sortBar.appendChild(b);
+  }
+  const tally = document.createElement("span");
+  tally.className = "ctl-tally"; tally.id = "ledger-tally";
+  sortBar.appendChild(tally);
+  wrap.appendChild(sortBar);
+
+  const clist = document.createElement("div");
+  clist.id = "ledger-list"; clist.className = "ledger-list";
+  wrap.appendChild(clist);
+  renderLedgerList(priced);
+
   /* --- Coverage Pulse: what the trade press is paying attention to — story
          counts as share of coverage, this week vs last. Attention, not dollars. --- */
   const maxDate = stories.reduce((m, s) => (s._date > m ? s._date : m), "0000");
@@ -1702,27 +1795,6 @@ async function renderTrends() {
       }
       return { label: typeInfo(name).emoji + " " + name, value: n, sub: `${pct}%${delta}`, color: typeInfo(name).color };
     })));
-  }
-
-  /* --- Records: superlatives are robust to coverage bias; sums aren't. --- */
-  const records = stories.filter((s) => s.valueUsd).sort((a, b) => b.valueUsd - a.valueUsd).slice(0, 5);
-  if (records.length) {
-    wrap.appendChild(subHead("Records", "Largest reported deals to date."));
-    const box = document.createElement("div");
-    box.className = "week-stories";
-    for (const s of records) {
-      const btn = document.createElement("button");
-      btn.className = "week-story";
-      btn.addEventListener("click", () => { location.hash = `/story/${s._date}/${s.id}`; });
-      const h4 = document.createElement("h4");
-      h4.textContent = s.title;
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = [fmtValue(s.valueUsd), s.market, s.assetClass, formatDate(s._date, { month: "short", day: "numeric" })].filter(Boolean).join(" · ");
-      btn.append(h4, meta);
-      box.appendChild(btn);
-    }
-    wrap.appendChild(box);
   }
 
   /* --- Distress Watch: a running list of distress events — an early-warning
@@ -1770,37 +1842,6 @@ async function renderTrends() {
     }
   }
 
-  /* --- Deal Ledger: every priced transaction, as reported. Facts, no sums.
-         Last on the page by design — the line items are reference material,
-         not the headline. --- */
-  const priced = stories
-    .filter((s) => s.valueUsd)
-    .sort((a, b) => b._date.localeCompare(a._date) || (b.valueUsd - a.valueUsd));
-
-  wrap.appendChild(subHead("Deal Ledger", "Every priced deal from the briefings — a comps record, newest first. $/sf and $/unit appear as sizes get reported."));
-
-  const bar = document.createElement("div");
-  bar.className = "ctl-row ledger-bar";
-  bar.appendChild(makeSelect("All markets", counts(priced, "market"), state.trendFilters.market, (v) => {
-    state.trendFilters.market = v; renderLedgerList(priced);
-  }));
-  bar.appendChild(makeSelect("All assets", counts(priced, "assetClass"), state.trendFilters.asset, (v) => {
-    state.trendFilters.asset = v; renderLedgerList(priced);
-  }));
-  bar.appendChild(makeSelect("All types", counts(priced, "dealType"), state.trendFilters.type, (v) => {
-    state.trendFilters.type = v; renderLedgerList(priced);
-  }));
-  const tally = document.createElement("span");
-  tally.className = "ctl-tally";
-  tally.id = "ledger-tally";
-  bar.appendChild(tally);
-  wrap.appendChild(bar);
-
-  const list = document.createElement("div");
-  list.id = "ledger-list";
-  list.className = "ledger-list";
-  wrap.appendChild(list);
-  renderLedgerList(priced);
 }
 
 /* ---------- players ---------- */
