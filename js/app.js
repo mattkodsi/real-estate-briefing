@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v72";
+const APP_VERSION = "v73";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -97,6 +97,48 @@ function sanitizeArticleHtml(html) {
       const m = tag.match(/src\s*=\s*["']([^"']+)["']/i);
       return m && isJunkImageUrl(m[1]) ? "" : tag;
     });
+}
+
+/* Identify the same underlying photo across different CDN/proxy transforms.
+   News CDNs (imgproxy, etc.) serve one source image at many sizes with different
+   signatures — so the hero (fit:770x435) and the body's lead <figure>
+   (fill:1200x675) are DIFFERENT urls for the SAME picture. We fingerprint each by
+   the origin filename, decoding any base64 path segment (imgproxy encodes the
+   source url that way), so those two still match and we can drop the duplicate. */
+function imageKeys(src) {
+  const keys = new Set();
+  if (!src) return keys;
+  const EXT = /([^/\\]+\.(?:jpe?g|png|gif|webp|avif))/i;
+  for (const seg of String(src).split(/[?#]/)[0].split("/")) {
+    const fn = seg.match(EXT);
+    if (fn) keys.add(fn[1].toLowerCase());
+    const bare = seg.replace(/\.(?:webp|jpe?g|png|gif|avif)$/i, "");
+    if (/^[A-Za-z0-9_+/-]{16,}={0,2}$/.test(bare)) {
+      try {
+        const dec = atob(bare.replace(/-/g, "+").replace(/_/g, "/"));
+        const m = dec.match(EXT);
+        if (m) keys.add(m[1].toLowerCase());
+      } catch { /* segment wasn't base64 */ }
+    }
+  }
+  return keys;
+}
+function sameImage(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const kb = imageKeys(b);
+  for (const k of imageKeys(a)) if (kb.has(k)) return true;
+  return false;
+}
+/* Drop a leading body image (and its <figure>/<figcaption>) that just repeats the
+   hero art — the #1 "poor import" artifact. Only the FIRST image is considered, so
+   a genuinely different in-article photo is never removed. */
+function dedupeLeadImage(bodyEl, heroSrc) {
+  if (!bodyEl || !heroSrc) return;
+  const img = bodyEl.querySelector("img");
+  if (img && sameImage(img.getAttribute("src"), heroSrc)) {
+    (img.closest("figure") || img).remove();
+  }
 }
 
 /* Price-efficiency chip: $/unit when a unit count is known (multifamily), else
@@ -4430,8 +4472,7 @@ async function openReaderRoute(date, id) {
   const body = $("reader-body");
   if (story.content) {
     body.innerHTML = sanitizeArticleHtml(story.content);
-    const firstImg = body.querySelector("img");
-    if (firstImg && story.image && firstImg.src === story.image) firstImg.remove();
+    dedupeLeadImage(body, story.image);
   } else {
     body.innerHTML = "";
     const p = document.createElement("p");
@@ -4646,6 +4687,7 @@ function showReaderVersion(story, date, idx) {
 
   const body = $("reader-body");
   body.innerHTML = sanitizeArticleHtml(content);
+  if (!c) dedupeLeadImage(body, story.image);  // hero shows only on the primary version
   linkifyElement(body);
 
   const url = (c && c.url) || story.url || "#";
