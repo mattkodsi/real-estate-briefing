@@ -8,13 +8,13 @@
   <title>Real Estate Briefing</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗞️</text></svg>">
   <!-- installable PWA: manifest + iOS home-screen chrome; sw.js caches the app shell for offline -->
-  <link rel="manifest" href="manifest.webmanifest?v=60">
+  <link rel="manifest" href="manifest.webmanifest?v=61">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Briefing">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <!-- bump ?v= on every deploy so cached pages can never pair old code with new data -->
-  <link rel="stylesheet" href="css/style.css?v=60">
+  <link rel="stylesheet" href="css/style.css?v=61">
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
 </head>
 <body>
@@ -93,13 +93,16 @@
       <div class="map-bar">
         <span class="map-title" id="map-title"></span>
         <div class="map-toggle" role="group" aria-label="Map scope">
-          <button id="map-mode-day" class="on">This day</button>
-          <button id="map-mode-all">All days</button>
+          <button id="map-mode-day" class="on">Day</button>
+          <button id="map-mode-week">Week</button>
+          <button id="map-mode-all">All time</button>
         </div>
       </div>
+      <div id="map-filters" class="map-filters"></div>
       <div id="map-legend" class="map-legend"></div>
       <div id="map-canvas"></div>
-      <p class="map-hint">Tap a pin to preview the deal; tap the headline to read it. Tap a legend chip to isolate that type.</p>
+      <div id="map-playback" class="map-playback" hidden></div>
+      <p class="map-hint">Pins scale with deal size. Tap a pin to preview; tap the headline to read. Tap a legend chip to isolate a type; in All time, press play to watch deals accumulate.</p>
     </section>
 
     <!-- Trends -->
@@ -222,7 +225,7 @@
 
   <div id="toast" role="status"></div>
 
-  <script src="js/app.js?v=60"></script>
+  <script src="js/app.js?v=61"></script>
   <script>
     if ('serviceWorker' in navigator) {
       // Auto-update: reload once the instant a new service worker takes control,
@@ -239,7 +242,7 @@
         });
       }
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js?v=60').then(function (reg) {
+        navigator.serviceWorker.register('sw.js?v=61').then(function (reg) {
           reg.update(); // check for a newer version right now…
           document.addEventListener('visibilitychange', function () {
             // …and every time the app is reopened or refocused

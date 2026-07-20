@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v60";
+const APP_VERSION = "v61";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 
@@ -87,6 +87,9 @@ const state = {
   filters: { type: null, asset: null, market: null },
   groupBy: "section",
   mapTypeFilter: null, // null = all; otherwise a Set of dealTypes
+  mapAsset: null,      // asset-class filter on the map
+  mapValueBand: null,  // min deal size filter (number) or null
+  mapPlaying: false,   // all-time playback running
   controlsDate: null,  // filters reset when the viewed day changes
   players: null,       // slug -> entity (people + companies roster)
   playerType: "people",   // "people" | "companies"
@@ -408,6 +411,7 @@ async function init() {
     }
   });
   $("map-mode-day").addEventListener("click", () => setMapMode("day"));
+  $("map-mode-week").addEventListener("click", () => setMapMode("week"));
   $("map-mode-all").addEventListener("click", () => setMapMode("all"));
   window.addEventListener("hashchange", route);
   document.addEventListener("keydown", (e) => {
@@ -1255,9 +1259,39 @@ function renderFeed(day) {
 
 /* ---------- map view ---------- */
 
+function weekMonday(iso) {
+  const d = new Date(iso + "T00:00:00");
+  const dow = (d.getDay() + 6) % 7; // 0 = Monday
+  return addDays(iso, -dow);
+}
+
+function mapDates() {
+  if (state.mapMode === "all") return state.dates;
+  if (state.mapMode === "week") {
+    const cur = state.currentDate || state.dates[state.dates.length - 1];
+    if (!cur) return [];
+    const mon = weekMonday(cur);
+    return state.dates.filter((d) => d >= mon && d <= cur);
+  }
+  return [state.currentDate].filter(Boolean);
+}
+
+function mapTitle(dates) {
+  if (state.mapMode === "all") return `All time · ${dates.length} day${dates.length === 1 ? "" : "s"}`;
+  if (state.mapMode === "week") return dates.length ? `Week of ${formatDate(dates[0], { month: "short", day: "numeric" })}` : "This week";
+  return state.currentDate ? formatDate(state.currentDate, { weekday: "long", month: "long", day: "numeric" }) : "";
+}
+
+// pin diameter grows with deal size (sqrt → area tracks value); no value = small
+function pinSize(v) {
+  if (!v) return 22;
+  return Math.max(20, Math.min(58, 20 + Math.sqrt(v / 1e6) * 1.5));
+}
+
 function setMapMode(mode) {
   state.mapMode = mode;
   $("map-mode-day").classList.toggle("on", mode === "day");
+  $("map-mode-week").classList.toggle("on", mode === "week");
   $("map-mode-all").classList.toggle("on", mode === "all");
   renderMap();
 }
@@ -1268,83 +1302,140 @@ async function renderMap() {
     canvas.innerHTML = "<p style='padding:20px;font-size:13px;color:var(--ink-2)'>Map library couldn't load (offline?). Try again once connected.</p>";
     return;
   }
-
   if (!state.map) {
-    state.map = L.map("map-canvas", {
-      scrollWheelZoom: true,
-      wheelPxPerZoomLevel: 120,
-      wheelDebounceTime: 25,
-      zoomAnimation: true,
-      fadeAnimation: true,
-    });
+    state.map = L.map("map-canvas", { scrollWheelZoom: true, wheelPxPerZoomLevel: 120, wheelDebounceTime: 25, zoomAnimation: true, fadeAnimation: true });
     addTileLayer();
-    // swap basemap when the OS theme flips
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-      if (state.map) addTileLayer();
-    });
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (state.map) addTileLayer(); });
     state.markers = L.layerGroup().addTo(state.map);
   }
+  stopPlayback(); // any re-render cancels a running accumulation
 
-  const dates = state.mapMode === "all" ? state.dates : [state.currentDate].filter(Boolean);
-  $("map-title").textContent = state.mapMode === "all"
-    ? `All coverage · ${state.dates.length} day${state.dates.length === 1 ? "" : "s"}`
-    : (state.currentDate ? formatDate(state.currentDate, { weekday: "long", month: "long", day: "numeric" }) : "");
-
-  state.markers.clearLayers();
-  const pts = [];
-  const typeTally = new Map();
-
+  const dates = mapDates();
+  const items = [];       // every located story in the window
+  const assets = new Set();
   for (const date of dates) {
     const day = await getDay(date);
     for (const story of day?.stories || []) {
-      const t = typeInfo(story.dealType);
-      const hasLoc = (story.locations || []).some((l) => typeof l.lat === "number");
-      if (hasLoc && story.dealType) typeTally.set(story.dealType, (typeTally.get(story.dealType) || 0) + 1);
-      if (state.mapTypeFilter && !state.mapTypeFilter.has(story.dealType)) continue;
+      if (story.assetClass) assets.add(story.assetClass);
       for (const loc of story.locations || []) {
-        if (typeof loc.lat !== "number" || typeof loc.lng !== "number") continue;
-        pts.push([loc.lat, loc.lng]);
-        const marker = L.marker([loc.lat, loc.lng], {
-          icon: L.divIcon({
-            className: "emoji-pin-wrap",
-            html: `<div class="emoji-pin" style="border-color:${t.color}">${t.emoji}</div>`,
-            iconSize: [30, 30],
-            iconAnchor: [15, 15],
-            popupAnchor: [0, -14],
-          }),
-        });
-        const div = document.createElement("div");
-        div.className = "map-popup";
-        const h4 = document.createElement("h4");
-        h4.textContent = story.title;
-        h4.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
-        const meta = document.createElement("div");
-        meta.className = "pop-meta";
-        meta.textContent = [
-          story.dealType ? `${t.emoji} ${story.dealType}` : null,
-          story.assetClass,
-          fmtValue(story.valueUsd),
-          formatDate(date, { month: "short", day: "numeric" }),
-        ].filter(Boolean).join(" · ");
-        const locEl = document.createElement("div");
-        locEl.className = "pop-loc";
-        locEl.textContent = loc.label || "";
-        div.append(h4, meta, locEl);
-        marker.bindPopup(div, { maxWidth: 260 });
-        state.markers.addLayer(marker);
+        if (typeof loc.lat === "number" && typeof loc.lng === "number") items.push({ date, story, loc });
       }
     }
   }
 
-  renderMapLegend(typeTally);
+  $("map-title").textContent = mapTitle(dates);
+  renderMapFilters([...assets].sort());
 
-  // let the container get its size before fitting
-  requestAnimationFrame(() => {
+  // asset + size filters first; the dealType legend filter is layered on top
+  const afterAV = items.filter((it) =>
+    (!state.mapAsset || it.story.assetClass === state.mapAsset) &&
+    (!state.mapValueBand || (it.story.valueUsd || 0) >= state.mapValueBand));
+  const tally = new Map();
+  for (const it of afterAV) if (it.story.dealType) tally.set(it.story.dealType, (tally.get(it.story.dealType) || 0) + 1);
+  const shown = afterAV.filter((it) => !state.mapTypeFilter || state.mapTypeFilter.has(it.story.dealType));
+
+  renderMapLegend(tally);
+  drawMapMarkers(shown, true);
+  renderPlayback(shown);
+}
+
+function drawMapMarkers(items, fit) {
+  state.markers.clearLayers();
+  const pts = [];
+  for (const { date, story, loc } of items) {
+    const t = typeInfo(story.dealType);
+    const sz = pinSize(story.valueUsd);
+    pts.push([loc.lat, loc.lng]);
+    const marker = L.marker([loc.lat, loc.lng], {
+      icon: L.divIcon({
+        className: "emoji-pin-wrap",
+        html: `<div class="emoji-pin" style="border-color:${t.color};width:${sz}px;height:${sz}px;font-size:${Math.round(sz * 0.5)}px">${t.emoji}</div>`,
+        iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2], popupAnchor: [0, -sz / 2 + 2],
+      }),
+    });
+    const div = document.createElement("div");
+    div.className = "map-popup";
+    const h4 = document.createElement("h4");
+    h4.textContent = story.title;
+    h4.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
+    const meta = document.createElement("div");
+    meta.className = "pop-meta";
+    meta.textContent = [story.dealType ? `${t.emoji} ${story.dealType}` : null, story.assetClass, fmtValue(story.valueUsd), formatDate(date, { month: "short", day: "numeric" })].filter(Boolean).join(" · ");
+    const locEl = document.createElement("div");
+    locEl.className = "pop-loc";
+    locEl.textContent = loc.label || "";
+    div.append(h4, meta, locEl);
+    marker.bindPopup(div, { maxWidth: 260 });
+    state.markers.addLayer(marker);
+  }
+  if (fit) requestAnimationFrame(() => {
     state.map.invalidateSize();
     if (pts.length > 1) state.map.fitBounds(pts, { padding: [36, 36] });
     else if (pts.length === 1) state.map.setView(pts[0], 11);
-    else state.map.setView([39.5, -95], 4); // continental US
+    else state.map.setView([39.5, -95], 4);
   });
+}
+
+function renderMapFilters(assets) {
+  const bar = $("map-filters");
+  bar.innerHTML = "";
+  const mk = (label, opts, cur, on) => {
+    const sel = document.createElement("select");
+    sel.className = "ctl-select";
+    const f = document.createElement("option"); f.value = ""; f.textContent = label; sel.appendChild(f);
+    for (const [val, txt] of opts) { const o = document.createElement("option"); o.value = String(val); o.textContent = txt; sel.appendChild(o); }
+    sel.value = cur != null ? String(cur) : "";
+    sel.addEventListener("change", () => on(sel.value || null));
+    return sel;
+  };
+  bar.appendChild(mk("Any asset", assets.map((a) => [a, a]), state.mapAsset, (v) => { state.mapAsset = v; renderMap(); }));
+  bar.appendChild(mk("Any size", [["25000000", "$25M+"], ["100000000", "$100M+"], ["500000000", "$500M+"]],
+    state.mapValueBand, (v) => { state.mapValueBand = v ? Number(v) : null; renderMap(); }));
+}
+
+/* All-time playback: pins accumulate week/day by day so you watch deal flow
+   spread across the map. Cumulative (not day-scrub) so sparse data reads as
+   growth, not flicker. */
+let playTimer = null;
+function stopPlayback() {
+  state.mapPlaying = false;
+  if (playTimer) { clearInterval(playTimer); playTimer = null; }
+}
+function renderPlayback(shown) {
+  const box = $("map-playback");
+  if (state.mapMode !== "all") { box.hidden = true; box.innerHTML = ""; return; }
+  box.hidden = false;
+  box.innerHTML = "";
+  const btn = document.createElement("button");
+  btn.className = "map-play-btn";
+  btn.textContent = state.mapPlaying ? "⏸ Pause" : "▶ Play accumulation";
+  btn.addEventListener("click", () => {
+    if (state.mapPlaying) { stopPlayback(); drawMapMarkers(shown, false); renderPlayback(shown); }
+    else { startPlayback(shown); renderPlayback(shown); }
+  });
+  const label = document.createElement("span");
+  label.className = "map-play-label"; label.id = "map-play-label";
+  box.append(btn, label);
+}
+function startPlayback(shown) {
+  stopPlayback();
+  const byDate = new Map();
+  for (const it of shown) { if (!byDate.has(it.date)) byDate.set(it.date, []); byDate.get(it.date).push(it); }
+  const days = [...byDate.keys()].sort();
+  if (!days.length) return;
+  state.mapPlaying = true;
+  state.markers.clearLayers();
+  let i = 0; const acc = []; let sum = 0;
+  const paint = () => { const l = $("map-play-label"); if (l) l.textContent = `${formatDate(days[Math.min(i, days.length - 1)], { month: "short", day: "numeric" })} · ${acc.length} deals · ${fmtValue(sum) || "$0"}`; };
+  const step = () => {
+    if (i >= days.length) { stopPlayback(); renderPlayback(shown); return; }
+    for (const it of byDate.get(days[i])) { acc.push(it); sum += it.story.valueUsd || 0; }
+    drawMapMarkers(acc, i === 0);
+    paint();
+    i++;
+  };
+  step();
+  playTimer = setInterval(step, Math.max(450, Math.min(1400, Math.round(11000 / days.length))));
 }
 
 function addTileLayer() {
