@@ -76,6 +76,52 @@ def _clean_url(url: str) -> str:
         return url
 
 
+def _registrable(url: str) -> str:
+    parts = _host(url).removeprefix("www.").split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else _host(url)
+
+
+# Subscriber sites whose session can genuinely expire — the app surfaces these in
+# its Connections panel and prompts a one-tap reconnect. (Bisnow fetches free, so
+# it never flags; only a real session-gated wall trips this.)
+SESSION_DOMAINS = {"therealdeal.com"}
+
+
+def flag_reconnect(domain: str, needs: bool) -> None:
+    """Publish session health to the public app_status table so the app can
+    proactively prompt a reconnect (needs=True) or clear it after a good fetch
+    (needs=False). Non-secret, anon-writable; never fatal."""
+    if domain not in SESSION_DOMAINS:
+        return
+    try:
+        # preserve savedAt (set by store-session on capture) so the app keeps
+        # showing "cookie saved X ago"; we only flip the health flag here
+        prev = {}
+        try:
+            greq = urllib.request.Request(
+                f"{SUPABASE_URL}/rest/v1/app_status?id=eq.conn_{domain}&select=data",
+                headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}"})
+            rows = json.load(urllib.request.urlopen(greq, timeout=15))
+            prev = (rows[0]["data"] if rows else {}) or {}
+        except Exception:
+            prev = {}
+        if prev.get("needsReconnect") == bool(needs):
+            return  # no change — don't churn the row
+        data = dict(prev)
+        data.update({"domain": domain, "needsReconnect": bool(needs),
+                     "checkedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/app_status",
+            data=json.dumps({"id": f"conn_{domain}", "data": data}).encode(),
+            headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}",
+                     "Content-Type": "application/json",
+                     "Prefer": "resolution=merge-duplicates,return=minimal"},
+            method="POST")
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception:
+        pass  # a health blip must never break a fill run
+
+
 def _today() -> str:
     return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
@@ -210,11 +256,16 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
             if status == "filled":
                 filled.append(sid)
                 unresolved.pop(sid, None)
+                # a good subscriber fetch proves the session is live — clear any
+                # stale reconnect flag so the app's nudge self-heals
+                flag_reconnect(_registrable(s.get("url", "")), False)
                 print(f"  ✓ {sid:<40} {detail} words{tag}")
             elif status == "paywalled":
                 if sid not in paywalled:
                     paywalled.append(sid)
                 unresolved.pop(sid, None)
+                # genuine session-gated wall — prompt a reconnect in the app
+                flag_reconnect(_registrable(s.get("url", "")), True)
                 print(f"  ⚠ {sid:<40} TRD paywalled (session expired)")
             elif status == "blocked":
                 unresolved[sid] = ("blocked", detail)

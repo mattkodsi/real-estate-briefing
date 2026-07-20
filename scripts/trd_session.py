@@ -69,46 +69,24 @@ def _domain() -> str:
 
 def store(cookie_header: str, how: str) -> None:
     domain = _domain()
-    # legacy row name for TRD (the pipeline reads both); session_<domain> for the rest
-    row_id = "trd_session" if domain == "therealdeal.com" else f"session_{domain}"
-    row = {
-        "id": row_id,
-        "data": {
-            "cookie": cookie_header,
-            "domain": domain,
-            "savedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "via": how,
-            "note": "Browser session cookies only; no password is ever stored.",
-        },
-    }
-    # return=minimal: the vault denies anon SELECT, so don't ask PostgREST to
-    # echo the row back (that would need a read privilege we intentionally lack).
+    # The cookie vault denies the public key writes, so capture routes through the
+    # store-session edge function (service role). It upserts the cookie into
+    # `secrets` and the non-secret health into public `app_status` in one call.
     req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/secrets",
-        data=json.dumps(row).encode(),
+        f"{SUPABASE_URL}/functions/v1/store-session",
+        data=json.dumps({"domain": domain, "cookie": cookie_header, "via": how}).encode(),
         headers={
             "apikey": ANON_KEY,
             "Authorization": f"Bearer {ANON_KEY}",
             "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates,return=minimal",
         },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        assert resp.status in (200, 201, 204)
-    # non-secret connection metadata lives in the public app_status table so the
-    # app can show session health WITHOUT ever reading the cookie vault
-    meta = {"id": f"conn_{domain}", "data": {"domain": domain, "savedAt": row["data"]["savedAt"], "needsReconnect": False}}
-    try:
-        mreq = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/app_status", data=json.dumps(meta).encode(),
-            headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}",
-                     "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"},
-            method="POST")
-        urllib.request.urlopen(mreq, timeout=15).read()
-    except Exception:
-        pass
-    print(f"Session cookie stored. The pipeline will now use it for {domain} articles.")
+        body = json.load(resp)
+    if not body.get("ok"):
+        raise SystemExit(f"store-session failed: {body.get('error')}")
+    print(f"Session cookie stored ({body.get('cookieLen')} chars). The pipeline will now use it for {domain} articles.")
 
 
 def run_cookie_mode() -> None:

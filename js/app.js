@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v69";
+const APP_VERSION = "v70";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -479,6 +479,8 @@ async function init() {
   });
 
   route();
+  // self-heal push subscriptions left on a rotated VAPID key (best-effort, async)
+  reconcilePushSub();
 }
 
 async function getDay(date) {
@@ -828,6 +830,7 @@ async function renderBriefing(date) {
     ? `Compiled ${new Date(day.generatedAt).toLocaleString("en-US", { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}`
     : "";
   paintHealthDot(day);
+  connectionBanner();  // proactive reconnect nudge if a subscriber session lapsed
 }
 
 function contentWords(story) {
@@ -5869,6 +5872,97 @@ async function readHeartbeatRow() {
   } catch { return null; }
 }
 
+/* ---------- Connections: subscriber-site session health + one-tap reconnect ----------
+   The cookie vault is server-only (the app never reads it). The app reads
+   non-secret health from app_status (conn_<domain>); when the pipeline detects a
+   session-gated fetch failing it flips needsReconnect, and the app proactively
+   prompts a reconnect. Reconnect = sign in to the site, then tap a saved
+   bookmarklet that reads the browser's own session cookie and posts it to the
+   store-session function (service role) — no password is ever entered or stored. */
+const SESSION_SITES = [
+  { domain: "therealdeal.com", label: "The Real Deal", login: "https://therealdeal.com/" },
+  { domain: "bisnow.com", label: "Bisnow", login: "https://www.bisnow.com/" },
+];
+
+async function getConnections() {
+  try {
+    const rows = await sb("app_status?id=like.conn_*&select=id,data");
+    const m = {};
+    for (const r of rows) m[(r.data && r.data.domain) || r.id.replace(/^conn_/, "")] = r.data || {};
+    return m;
+  } catch { return {}; }
+}
+
+// the reconnect action, as a javascript: bookmarklet the user saves once and taps
+// while signed in on the publisher's site. Reads readable cookies (Piano tokens
+// etc.), posts them to store-session.
+function reconnectBookmarklet() {
+  return "javascript:(async()=>{try{var c=document.cookie;if(!c||c.length<20){alert('Sign in first, then tap this again.');return;}"
+    + "var r=await fetch('" + SUPABASE_URL + "/functions/v1/store-session',{method:'POST',headers:{apikey:'" + SUPABASE_KEY + "','Content-Type':'application/json'},"
+    + "body:JSON.stringify({domain:location.hostname,cookie:c,via:'bookmarklet'})});var j=await r.json();"
+    + "alert(j.ok?('\\u2705 Reconnected '+j.domain):('\\u26a0\\ufe0f '+(j.error||'failed')));}catch(e){alert('\\u26a0\\ufe0f '+e);}})()";
+}
+
+function openReconnectSheet(site) {
+  const bm = reconnectBookmarklet();
+  const ov = document.createElement("div");
+  ov.className = "reconnect-ov";
+  const card = document.createElement("div");
+  card.className = "reconnect-card";
+  const bmAttr = bm.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  card.innerHTML =
+    '<button class="reconnect-close" aria-label="Close">✕</button>'
+    + '<h3>Reconnect ' + site.label + '</h3>'
+    + '<p class="reconnect-lead">Once you’ve saved the key button below, reconnecting is two taps whenever a session lapses.</p>'
+    + '<ol class="reconnect-steps">'
+    + '<li><b>Sign in</b> to ' + site.label + '.<br><a class="reconnect-open" href="' + site.login + '" target="_blank" rel="noopener">Open ' + site.label + ' ↗</a></li>'
+    + '<li><b>Save this button</b> to your bookmarks/favorites (one time). On desktop drag it to the bookmarks bar; on a phone, use “Copy” below and paste it into a new bookmark’s URL.<br><a class="reconnect-bm" href="' + bmAttr + '">🔑 Reconnect ' + site.label + '</a></li>'
+    + '<li>Back on ' + site.label + ' while signed in, <b>tap that saved bookmark</b>. You’ll see “Reconnected ✅”.</li>'
+    + '</ol>'
+    + '<button class="reconnect-copy">Copy the reconnect button</button>'
+    + '<p class="reconnect-note">No password is entered or stored — only your browser’s existing session cookie, sent to your own backend.</p>';
+  ov.appendChild(card);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  card.querySelector(".reconnect-close").addEventListener("click", close);
+  ov.addEventListener("click", (e) => { if (e.target === ov) close(); });
+  // tapping the bookmarklet link inside the app would run it on the WRONG origin;
+  // it exists to be dragged/saved, so intercept an in-app click with guidance
+  card.querySelector(".reconnect-bm").addEventListener("click", (e) => {
+    e.preventDefault();
+    flashToast("Save this to bookmarks, then tap it on the site — don’t run it here");
+  });
+  card.querySelector(".reconnect-copy").addEventListener("click", () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(bm).then(() => flashToast("Reconnect button copied")).catch(() => {});
+    else flashToast("Copy not supported — long-press the key button to copy its link");
+  });
+}
+
+// proactive nudge: if any site is flagged for reconnect, show a dismissible
+// banner at the top of the briefing (in addition to the push alert)
+async function connectionBanner() {
+  const host = $("view-briefing");
+  if (!host || host.hidden) return;
+  const conns = await getConnections();
+  const stale = SESSION_SITES.filter((s) => conns[s.domain] && conns[s.domain].needsReconnect);
+  document.getElementById("conn-banner")?.remove();
+  if (!stale.length) return;
+  const b = document.createElement("div");
+  b.id = "conn-banner";
+  b.className = "conn-banner";
+  const names = stale.map((s) => s.label).join(" & ");
+  b.innerHTML = '<span>🔑 ' + names + ' ' + (stale.length === 1 ? "session needs" : "sessions need") + ' reconnecting to keep pulling articles.</span>';
+  const btn = document.createElement("button");
+  btn.className = "conn-banner-btn";
+  btn.textContent = "Reconnect";
+  btn.addEventListener("click", () => openReconnectSheet(stale[0]));
+  const x = document.createElement("button");
+  x.className = "conn-banner-x"; x.textContent = "✕"; x.setAttribute("aria-label", "Dismiss");
+  x.addEventListener("click", () => b.remove());
+  b.append(btn, x);
+  host.insertBefore(b, host.firstChild);
+}
+
 function ageMin(iso) {
   return iso ? (Date.now() - Date.parse(iso)) / 60000 : Infinity;
 }
@@ -6480,16 +6574,22 @@ async function renderStatus() {
   wrap.appendChild(srcCard);
 
   const sysCard = statusCard("Sessions & rates");
-  for (const [id, label] of [["conn_therealdeal.com", "The Real Deal login"], ["conn_bisnow.com", "Bisnow login"]]) {
-    const row = connMeta.find((r) => r.id === id);
+  for (const site of SESSION_SITES) {
+    const label = site.label + " login";
+    const row = connMeta.find((r) => r.id === "conn_" + site.domain);
     const at = row?.data?.savedAt;
     const needs = row?.data?.needsReconnect;
     // neutral tone on purpose: a stored cookie is NOT proof content is fetching.
     // Most subscriber articles ship full text without a login. Red only when the
     // pipeline actually detected a session-gated fetch failing (needsReconnect).
-    statusRow(sysCard, label,
+    const r = statusRow(sysCard, label,
       needs ? "reconnect needed" : at ? `cookie saved ${fmtAge(ageMin(at))}` : "not stored",
       needs ? "bad" : at && ageMin(at) / 1440 > 60 ? "warn" : "");
+    const btn = document.createElement("button");
+    btn.className = "status-reconnect" + (needs ? " urgent" : "");
+    btn.textContent = "Reconnect";
+    btn.addEventListener("click", () => openReconnectSheet(site));
+    r.appendChild(btn);
   }
   const sNote = document.createElement("p");
   sNote.className = "status-note";
@@ -6536,15 +6636,27 @@ function urlB64ToUint8Array(s) {
 }
 
 async function vapidPublicKey() {
-  try {
-    const rows = await sb("secrets?id=eq.vapid&select=data");
-    if (rows[0]?.data?.publicKeyB64) return rows[0].data.publicKeyB64;
-  } catch { /* fall through to setup */ }
+  // The VAPID public key is served by push-send (?setup=1). It reads the keypair
+  // from the locked secrets vault with the service role — the app can't (and no
+  // longer tries to) read the vault directly.
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/push-send?setup=1`, {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
     });
     return (await res.json()).publicKeyB64 || null;
+  } catch { return null; }
+}
+
+// base64url of a subscription's applicationServerKey, for comparing against the
+// current server key (they diverge after a VAPID rotation → the sub is stale)
+function subServerKeyB64(sub) {
+  try {
+    const buf = sub?.options?.applicationServerKey;
+    if (!buf) return null;
+    const bytes = new Uint8Array(buf);
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   } catch { return null; }
 }
 
@@ -6554,6 +6666,28 @@ async function currentPushSub() {
     const reg = await navigator.serviceWorker.ready;
     return await reg.pushManager.getSubscription();
   } catch { return null; }
+}
+
+// After a VAPID key rotation, a device's existing subscription is signed against
+// the OLD key and silently stops receiving pushes. On boot we detect that (the
+// sub's key ≠ the current server key) and transparently re-subscribe with the new
+// key, so alerts self-heal without the user re-enabling anything. Best-effort.
+async function reconcilePushSub() {
+  if (!pushSupported()) return;
+  try {
+    const sub = await currentPushSub();
+    if (!sub) return;  // nothing subscribed on this device — nothing to reconcile
+    const key = await vapidPublicKey();
+    if (!key) return;
+    if (subServerKeyB64(sub) === key) return;  // already on the current key
+    try { await sub.unsubscribe(); } catch { /* ignore */ }
+    const reg = await navigator.serviceWorker.ready;
+    const fresh = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToUint8Array(key),
+    });
+    await savePushSub(fresh.toJSON(), false);
+  } catch { /* a failed reconcile just leaves the old sub; next boot retries */ }
 }
 
 async function savePushSub(subJson, disabled) {
@@ -6580,6 +6714,11 @@ async function enableAlerts() {
   try {
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
+    // drop a subscription left on a retired VAPID key so we re-subscribe cleanly
+    if (sub && subServerKeyB64(sub) !== key) {
+      try { await sub.unsubscribe(); } catch { /* ignore */ }
+      sub = null;
+    }
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,

@@ -1998,6 +1998,74 @@ button.heat-cell:active { outline: 1.5px solid var(--ink); }
 .status-value.bad { color: #d23f31; }
 .status-value.quiet { color: var(--ink-3); font-weight: 400; }
 .status-note { font-size: 11px; color: var(--ink-3); margin: 10px 0 0; line-height: 1.5; }
+
+/* Connections: reconnect button on session rows, proactive banner, reconnect sheet */
+.status-row:has(.status-reconnect) .status-label { flex: 1 1 auto; }
+.status-reconnect {
+  flex: none; margin-left: 8px;
+  font: 600 11px var(--sans);
+  color: var(--accent); background: transparent;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 999px; padding: 3px 10px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.status-reconnect:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.status-reconnect.urgent { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+.conn-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin: 0 0 14px; padding: 11px 13px;
+  background: color-mix(in srgb, #d23f31 9%, var(--box));
+  border: 1px solid color-mix(in srgb, #d23f31 34%, var(--rule));
+  border-radius: 12px; font-size: 13px; line-height: 1.4; color: var(--ink);
+}
+.conn-banner span { flex: 1 1 auto; }
+.conn-banner-btn {
+  flex: none; font: 600 12px var(--sans); color: #fff;
+  background: var(--accent); border: none; border-radius: 999px;
+  padding: 6px 13px; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.conn-banner-x {
+  flex: none; background: none; border: none; color: var(--ink-3);
+  font-size: 15px; line-height: 1; cursor: pointer; padding: 4px;
+}
+
+.reconnect-ov {
+  position: fixed; inset: 0; z-index: 3000;
+  background: color-mix(in srgb, #000 52%, transparent);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.reconnect-card {
+  position: relative; width: 100%; max-width: 440px;
+  max-height: 88vh; overflow-y: auto;
+  background: var(--box); border: 1px solid var(--rule);
+  border-radius: 16px; padding: 22px 20px 20px;
+  box-shadow: 0 24px 60px -18px rgba(0,0,0,.5);
+}
+.reconnect-card h3 { font: 700 18px/1.2 var(--serif); margin: 0 0 6px; color: var(--ink); }
+.reconnect-close {
+  position: absolute; top: 12px; right: 12px;
+  background: none; border: none; color: var(--ink-3);
+  font-size: 16px; line-height: 1; cursor: pointer; padding: 6px;
+}
+.reconnect-lead { font-size: 13px; color: var(--ink-2); line-height: 1.5; margin: 0 0 14px; }
+.reconnect-steps { margin: 0 0 14px; padding-left: 20px; }
+.reconnect-steps li { font-size: 13.5px; line-height: 1.55; color: var(--ink); margin-bottom: 12px; }
+.reconnect-open, .reconnect-bm {
+  display: inline-block; margin-top: 6px; font: 600 13px var(--sans);
+  text-decoration: none; border-radius: 999px; padding: 6px 13px;
+}
+.reconnect-open { color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent); }
+.reconnect-bm { color: #fff; background: var(--accent); }
+.reconnect-copy {
+  width: 100%; font: 600 13px var(--sans); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 10px; padding: 10px; cursor: pointer;
+}
+.reconnect-note { font-size: 11px; color: var(--ink-3); line-height: 1.5; margin: 12px 0 0; }
+
 @media (prefers-color-scheme: dark) {
   .status-value.ok { color: #5bd07f; }
   .status-value.warn { color: #e8a54b; }
