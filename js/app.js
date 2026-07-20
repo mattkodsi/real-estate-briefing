@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v50";
+const APP_VERSION = "v51";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 
@@ -1731,14 +1731,17 @@ async function renderTrends() {
   /* --- Market Metrics: industry figures the trade press cites, with sources.
          Real series (delinquency, vacancy, rents, indices) — not story counts. --- */
   const metrics = await getMetrics();
+  wrap.appendChild(subHead("Market Metrics", "Industry figures cited in coverage — delinquency, vacancy, rents, price indices — each with its source."));
   if (metrics.length) {
-    wrap.appendChild(subHead("Market Metrics", "Industry figures cited in coverage — delinquency, vacancy, rents, price indices — each with its source."));
     const grid = document.createElement("div");
     grid.className = "metric-grid";
     for (const mtr of [...metrics].sort((a, b) => (b.series?.length || 0) - (a.series?.length || 0))) {
       grid.appendChild(metricCard(mtr));
     }
     wrap.appendChild(grid);
+  } else {
+    wrap.appendChild(emptyPanel("No metrics yet",
+      "As coverage cites market figures with a source — office CMBS delinquency (Trepp), vacancy and rents (CBRE/JLL), price indices (Green Street) — they collect here as tracked series."));
   }
 
   /* --- Story Arcs: a peek at running threads, with a link to the full set. --- */
