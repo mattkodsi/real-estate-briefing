@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v67";
+const APP_VERSION = "v68";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -6478,12 +6478,19 @@ async function renderStatus() {
   wrap.appendChild(srcCard);
 
   const sysCard = statusCard("Sessions & rates");
-  for (const [id, label] of [["trd_session", "The Real Deal session"], ["session_bisnow.com", "Bisnow session"]]) {
+  for (const [id, label] of [["trd_session", "The Real Deal login"], ["session_bisnow.com", "Bisnow login"]]) {
     const row = secretsMeta.find((r) => r.id === id);
     const at = row?.data?.savedAt || row?.updated_at;
-    statusRow(sysCard, label, at ? `saved ${fmtAge(ageMin(at))}` : "not stored",
-      at && ageMin(at) / 1440 > 45 ? "warn" : "ok");
+    // neutral tone on purpose: a stored cookie is NOT proof content is fetching.
+    // Most subscriber articles ship full text without a login; the cookie only
+    // matters for a few gated pages. So we report "when stored", not "healthy".
+    statusRow(sysCard, label, at ? `cookie saved ${fmtAge(ageMin(at))}` : "not stored",
+      at && ageMin(at) / 1440 > 60 ? "warn" : "");
   }
+  const sNote = document.createElement("p");
+  sNote.className = "status-note";
+  sNote.textContent = "A stored login isn't a guarantee of coverage — most subscriber articles ship their full text without one. TRD Data pages are a separate paid tier no login unlocks; they read at source. Watch \"Full text in-app\" above for the real picture.";
+  sysCard.appendChild(sNote);
   const rAge = ageMin(ratesAt);
   statusRow(sysCard, "Rates cache", fmtAge(rAge), rAge > 120 ? "warn" : "ok");
   wrap.appendChild(sysCard);
