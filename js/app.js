@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v62";
+const APP_VERSION = "v63";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 
@@ -3376,6 +3376,7 @@ function applyTextScale() {
 const readerScrollPos = {};             // date/id -> scrollTop (session memory)
 let readerPrevSection = null;           // section of the story we came from
 let readerStepFlash = false;            // set by readerStep so a fresh open doesn't flash
+let readerSlideIn = false;              // set by a peek fling: slide the reader up over the sheet
 let flashTimer = null;
 
 // remember scroll position and update "~N min left" as you read
@@ -3543,11 +3544,33 @@ async function openReaderRoute(date, id) {
   paintListenBtn(false);
 
   const reader = $("reader");
-  reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; // clear any pull-to-close residue
   reader.hidden = false;
   document.body.classList.add("reader-open");
   // scroll-position memory: return to where you left this story, else the top
   reader.scrollTop = readerScrollPos[readMark(date, story.id)] || 0;
+
+  if (readerSlideIn) {
+    // continuous "peek grows into the story": lift the reader above the sheet
+    // (z 700) and slide it up from the bottom over the frozen peek, then drop
+    // the now-covered sheet. No fade, no gap.
+    readerSlideIn = false;
+    reader.style.zIndex = "760";
+    reader.style.opacity = "1";
+    reader.style.transition = "none";
+    reader.style.transform = "translateY(100%)";
+    requestAnimationFrame(() => {
+      reader.style.transition = "transform .34s cubic-bezier(.2,.85,.25,1)";
+      reader.style.transform = "translateY(0)";
+    });
+    setTimeout(() => {
+      const s = $("sheet"); s.classList.remove("open"); s.hidden = true;
+      document.body.classList.remove("sheet-open");
+      reader.style.transition = ""; reader.style.transform = ""; reader.style.zIndex = "";
+    }, 360);
+  } else {
+    reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; // clear pull-to-close residue
+  }
+
   updateTimeLeft();
   // a short article that doesn't scroll is fully seen on open → mark it read
   requestAnimationFrame(() => {
@@ -3737,14 +3760,12 @@ function sheetDismiss() {
 function sheetOpenStory() {
   const t = peekTarget; peekTarget = null; sheetDragY = null;
   document.body.classList.remove("sheet-open");
-  const c = $("sheet-card");
-  c.style.transition = "transform .18s ease-out, opacity .18s ease";
-  c.style.transform = "translateY(-10px)"; c.style.opacity = "0";
-  setTimeout(() => {
-    const s = $("sheet"); s.classList.remove("open"); s.hidden = true;
-    c.style.opacity = "";
-    if (t) location.hash = `/story/${t.date}/${t.id}`;
-  }, 170);
+  if (!t) { closeSheet(); return; }
+  // Don't fade the sheet out. Leave it frozen where the fling left it and let
+  // openReaderRoute slide the full story UP over it — one continuous upward
+  // motion, the peek "growing" into the article rather than vanishing.
+  readerSlideIn = true;
+  location.hash = `/story/${t.date}/${t.id}`;
 }
 
 // long-press peek: summary + hero in a sheet; the long-press finger keeps
