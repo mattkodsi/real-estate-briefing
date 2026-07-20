@@ -277,7 +277,28 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
     return out
 
 
+def is_fabricated_bisnow_shortlink(url: str) -> bool:
+    """Bisnow email links are `a-prod.bisnow.io/s/<hex-id>` short-links (e.g.
+    /s/6a5aa4956aed4) that redirect to the real bisnow.com article. A descriptive
+    slug like /s/philly-centre-square-cancel is NOT a real short-link — it was
+    fabricated (the routine guessing a url instead of extracting the email's) and
+    always 404s. Reject these before wasting a fetch, and never pass one off as a
+    real source. (Real ids are lowercase hex; anything with letters g–z or a hyphen
+    is invented.)"""
+    try:
+        p = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+    if not p.netloc.lower().endswith("bisnow.io"):
+        return False
+    m = re.match(r"^/s/([^/?#]+)", p.path)
+    return bool(m) and not re.fullmatch(r"[0-9a-f]{8,}", m.group(1))
+
+
 def extract(url: str) -> dict:
+    if is_fabricated_bisnow_shortlink(url):
+        return {"ok": False, "words": 0, "notFound": True,
+                "note": "fabricated Bisnow short-link (non-hex slug) — not a real email link"}
     html, final_url = _get_html(url)
     return extract_from_html(html, url, final_url)
 

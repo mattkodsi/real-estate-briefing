@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v70";
+const APP_VERSION = "v71";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -392,7 +392,16 @@ async function init() {
   $("sharebox-share").addEventListener("click", async () => {
     if (!shareBoxState) return;
     const file = new File([shareBoxState.blob], shareBoxState.filename, { type: "image/png" });
+    const link = shareBoxState.link || null;
     try {
+      // share the card AND the article link together — iOS drops the image into
+      // the compose window and seeds the message body with the link, so the text
+      // is no longer empty. Only add text if the platform will still take the file
+      // (canShare with both), so we never regress the working image attach.
+      if (link && navigator.canShare && navigator.canShare({ files: [file], text: link })) {
+        await navigator.share({ files: [file], text: link });
+        return;
+      }
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file] });
         return;

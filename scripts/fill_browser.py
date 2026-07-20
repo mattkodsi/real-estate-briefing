@@ -111,6 +111,14 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
     filled, failed, changed_urls = [], [], 0
     for s in targets:
         sid = s.get("id")
+        # a fabricated Bisnow short-link (descriptive slug) 404s forever — drop the
+        # dead url so the app shows summary-only instead of linking to a 404
+        if fetch_article.is_fabricated_bisnow_shortlink(s.get("url", "")):
+            s.pop("url", None)
+            s.pop("sourceBlocked", None)
+            changed_urls += 1
+            print(f"  ⤫ {sid:<40} dropped fabricated Bisnow short-link")
+            continue
         try:
             dom = _registrable(urllib.parse.urlparse(s["url"]).netloc)
             if dom not in cookied:

@@ -198,6 +198,13 @@ def _try_story(s: dict) -> tuple[str, object]:
     """Attempt to fill one story's content. Mutates it on success.
     Returns (status, detail) where status is 'filled'|'paywalled'|'failed'."""
     have = _words(s.get("content"))
+    # a fabricated Bisnow short-link (descriptive slug, not a hex id) 404s forever;
+    # drop the dead url so the app shows the story summary-only instead of linking
+    # the reader to a 404 page. (The routine should never mint these — see CLAUDE.md.)
+    if fetch_article.is_fabricated_bisnow_shortlink(s.get("url", "")):
+        s.pop("url", None)
+        s.pop("sourceBlocked", None)
+        return "dropped", "removed fabricated Bisnow short-link (would 404)"
     try:
         res = fetch_article.extract(s["url"])
     except Exception as e:  # noqa: BLE001
@@ -244,7 +251,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
     # with a url deserves a reader page
     to_fetch = [s for s in stories if _words(s.get("content")) < MIN_WORDS and s.get("url")]
     skipped = len(stories) - len(to_fetch)
-    filled, paywalled = [], []
+    filled, paywalled, dropped = [], [], []
     unresolved = {}  # id -> (kind, detail); kind in {"blocked", "failed"}
 
     def run_pass(items: list, tag: str) -> None:
@@ -270,6 +277,12 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
             elif status == "blocked":
                 unresolved[sid] = ("blocked", detail)
                 print(f"  ⛔ {sid:<40} {detail}{tag}")
+            elif status == "dropped":
+                # a fabricated url was removed from the story — a change worth
+                # publishing so the app stops dead-linking to it
+                dropped.append(sid)
+                unresolved.pop(sid, None)
+                print(f"  ⤫ {sid:<40} {detail}")
             elif status in ("mismatch", "premium"):
                 # deterministic — a wrong-url pairing or a premium-tier page no
                 # session can unlock; don't retry, leave a clean tap-through
@@ -286,7 +299,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
         time.sleep(retry_wait)
         run_pass(retry, "  (retry)")
 
-    if filled:
+    if filled or dropped:
         day["generatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     blocked = [(i, d) for i, (k, d) in unresolved.items() if k == "blocked"]
@@ -305,7 +318,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
             s.pop("sourceBlocked", None)
 
     return {"filled": filled, "failed": failed, "blocked": blocked, "paywalled": paywalled,
-            "skipped": skipped, "attempted": len(to_fetch)}
+            "dropped": dropped, "skipped": skipped, "attempted": len(to_fetch)}
 
 
 def main() -> int:
@@ -329,7 +342,7 @@ def main() -> int:
     DATA.mkdir(exist_ok=True)
     path.write_text(json.dumps(day, ensure_ascii=False, indent=2))
 
-    if rep["filled"] and not no_push:
+    if (rep["filled"] or rep.get("dropped")) and not no_push:
         try:
             _push(day)
             print("  published updated day to Supabase")
@@ -346,6 +359,8 @@ def main() -> int:
         parts.append(f"{len(rep['failed'])} failed ({', '.join(i or '?' for i, _ in rep['failed'])})")
     if rep["paywalled"]:
         parts.append(f"{len(rep['paywalled'])} TRD-paywalled — refresh with: python3 scripts/trd_session.py --cookie")
+    if rep.get("dropped"):
+        parts.append(f"{len(rep['dropped'])} dropped fabricated Bisnow url ({', '.join(rep['dropped'])})")
     print("SUMMARY: " + " · ".join(parts) + f" · {rep['skipped']} already had content")
     return 0
 
