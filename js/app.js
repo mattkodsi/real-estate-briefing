@@ -5,9 +5,21 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v65";
+const APP_VERSION = "v66";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
+// Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
+// secret scanner blocks committing one, so it's served from a public Supabase
+// config row and fetched at runtime (cached after first read).
+let MAPBOX_TOKEN = null;
+async function getMapboxToken() {
+  if (MAPBOX_TOKEN) return MAPBOX_TOKEN;
+  try {
+    const rows = await sb("app_config?key=eq.mapbox_token&select=value");
+    MAPBOX_TOKEN = rows[0]?.value || null;
+  } catch { MAPBOX_TOKEN = null; }
+  return MAPBOX_TOKEN;
+}
 
 /* What can THIS device actually do with a share? iOS "Add to Home Screen"
    web apps have a standing WebKit limitation where files can't go through the
@@ -107,6 +119,12 @@ const state = {
   threads: null,       // story arcs (cross-day timelines)
   events: null,        // dated catalysts (the calendar)
   metrics: null,       // cited industry figures (market metrics)
+  pulse: null,         // Market Pulse: national + by-metro external data (FRED/Zillow)
+  pulseKey: null,      // which national signal's full chart is open
+  pulseRange: 60,      // Market Pulse chart window in months
+  pulseGroup: "rates", // Market Pulse active group tab
+  marketMetric: null,  // which external series' chart is open on a Market page
+  marketRange: 60,     // Market page chart window in months
   compSort: "recent",  // comps sort: "recent" | "value" | "psf" | "punit"
   compAsset: null,     // asset class scoping the by-market comps
   capAsset: null,      // asset class scoping the by-market cap rates
@@ -493,6 +511,26 @@ async function getMetrics() {
   return state.metrics;
 }
 
+async function getPulse() {
+  if (state.pulse) return state.pulse;
+  try {
+    const rows = await sb("market_pulse?id=eq.1&select=data");
+    state.pulse = rows[0]?.data ?? null;
+  } catch { state.pulse = null; }
+  // best-effort revalidate through the edge function (serves the cache unless
+  // it's gone stale, in which case it rebuilds) — never blocks first paint
+  fetch(`${SUPABASE_URL}/functions/v1/market-pulse`, {
+    cache: "no-store",
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+  }).then((r) => (r.ok ? r.json() : null)).then((d) => {
+    if (d && !d.error && (!state.pulse || d.generatedAt > state.pulse.generatedAt)) {
+      state.pulse = d;
+      if (location.hash.startsWith("#/desk/pulse") || location.hash.startsWith("#/market/")) route();
+    }
+  }).catch(() => {});
+  return state.pulse;
+}
+
 async function getWeek(weekOf) {
   if (!weekOf) return null;
   if (state.weeksData.has(weekOf)) return state.weeksData.get(weekOf);
@@ -640,6 +678,12 @@ function route() {
   } else if (h === "#/trends") {
     showView("trends");
     renderTrends();
+  } else if ((m = h.match(/^#\/desk\/([\w-]+)$/))) {
+    showView("trends");
+    renderDeskSection(m[1]);
+  } else if ((m = h.match(/^#\/market\/(.+)$/))) {
+    showView("market");
+    renderMarketPage(decodeURIComponent(m[1]));
   } else if (h === "#/search") {
     showView("search");
     renderSearch();
@@ -1311,22 +1355,58 @@ function setMapMode(mode) {
   renderMap();
 }
 
+// dealType → hex color as a Mapbox "match" expression, driving circle color
+function typeColorExpr() {
+  const m = ["match", ["get", "type"]];
+  for (const [name, info] of Object.entries(DEAL_TYPES)) m.push(name, info.color);
+  m.push("#8a94a0"); // default
+  return m;
+}
+
+// deal-circle radius: grows with value but HARD-CAPPED so a $1B deal is a tidy
+// ~20px dot, never a screen-eating ring (the old bug). Uses sqrt(value) so area
+// tracks dollars, interpolated between sensible stops.
+const RADIUS_EXPR = ["interpolate", ["linear"], ["sqrt", ["coalesce", ["get", "value"], 0]],
+  0, 5, 1000, 6.5, 5000, 9, 15000, 13, 31623, 18, 70000, 22];
+
 async function renderMap() {
   const canvas = $("map-canvas");
-  if (typeof L === "undefined") {
+  if (typeof mapboxgl === "undefined") {
     canvas.innerHTML = "<p style='padding:20px;font-size:13px;color:var(--ink-2)'>Map library couldn't load (offline?). Try again once connected.</p>";
     return;
   }
   if (!state.map) {
-    state.map = L.map("map-canvas", { scrollWheelZoom: true, wheelPxPerZoomLevel: 120, wheelDebounceTime: 25, zoomAnimation: true, fadeAnimation: true });
-    addTileLayer();
-    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (state.map) addTileLayer(); });
-    state.markers = L.layerGroup().addTo(state.map);
+    const token = await getMapboxToken();
+    if (!token) {
+      canvas.innerHTML = "<p style='padding:20px;font-size:13px;color:var(--ink-2)'>Map is momentarily unavailable. Try again in a moment.</p>";
+      return;
+    }
+    mapboxgl.accessToken = token;
+    state.map = new mapboxgl.Map({
+      container: "map-canvas",
+      style: "mapbox://styles/mapbox/satellite-streets-v12",
+      projection: "mercator", // flat map: predictable, and avoids the globe's
+      center: [-95, 39.5], zoom: 3.2, minZoom: 2, maxZoom: 18, // initial-tile 'load' hang
+      attributionControl: false, dragRotate: false, pitchWithRotate: false,
+      cooperativeGestures: false, logoPosition: "bottom-left",
+    });
+    state.map.touchZoomRotate.disableRotation();
+    state.map.addControl(new mapboxgl.NavigationControl({ showCompass: false, visualizePitch: false }), "top-right");
+    state.map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-right");
+    state.mapPopup = new mapboxgl.Popup({ closeButton: true, maxWidth: "270px", offset: 14, className: "mb-popup" });
+    // Add layers + draw as soon as the STYLE is ready. 'style.load' is reliable;
+    // the map-wide 'load' event can hang forever waiting on every initial tile.
+    const onReady = () => { if (state.mapReady) return; state.mapReady = true; mapEnsureLayers(); renderMap(); };
+    state.map.on("style.load", onReady);
+    state.map.on("load", onReady);
+    return;
   }
-  stopPlayback(); // any re-render cancels a running accumulation
+  if (!state.mapReady) return;
+  stopPlayback();
+  state.map.resize();
 
   const dates = mapDates();
-  const items = [];       // every located story in the window
+  const items = [];
   const assets = new Set();
   for (const date of dates) {
     const day = await getDay(date);
@@ -1341,7 +1421,6 @@ async function renderMap() {
   $("map-title").textContent = mapTitle(dates);
   renderMapFilters([...assets].sort());
 
-  // asset + size filters first; the dealType legend filter is layered on top
   const afterAV = items.filter((it) =>
     (!state.mapAsset || it.story.assetClass === state.mapAsset) &&
     (!state.mapValueBand || (it.story.valueUsd || 0) >= state.mapValueBand));
@@ -1349,46 +1428,148 @@ async function renderMap() {
   for (const it of afterAV) if (it.story.dealType) tally.set(it.story.dealType, (tally.get(it.story.dealType) || 0) + 1);
   const shown = afterAV.filter((it) => !state.mapTypeFilter || state.mapTypeFilter.has(it.story.dealType));
 
+  state.mapShown = shown;
   renderMapLegend(tally);
-  drawMapMarkers(shown, true);
+  drawDeals(shown, true);
   renderPlayback(shown);
 }
 
-function drawMapMarkers(items, fit) {
-  state.markers.clearLayers();
-  const pts = [];
-  for (const { date, story, loc } of items) {
-    const t = typeInfo(story.dealType);
-    const sz = pinSize(story.valueUsd);
-    pts.push([loc.lat, loc.lng]);
-    const marker = L.marker([loc.lat, loc.lng], {
-      icon: L.divIcon({
-        className: "emoji-pin-wrap",
-        html: `<div class="emoji-pin" style="border-color:${t.color};width:${sz}px;height:${sz}px;font-size:${Math.round(sz * 0.5)}px">${t.emoji}</div>`,
-        iconSize: [sz, sz], iconAnchor: [sz / 2, sz / 2], popupAnchor: [0, -sz / 2 + 2],
-      }),
-    });
-    const div = document.createElement("div");
-    div.className = "map-popup";
-    const h4 = document.createElement("h4");
-    h4.textContent = story.title;
-    h4.addEventListener("click", () => { location.hash = `/story/${date}/${story.id}`; });
-    const meta = document.createElement("div");
-    meta.className = "pop-meta";
-    meta.textContent = [story.dealType ? `${t.emoji} ${story.dealType}` : null, story.assetClass, fmtValue(story.valueUsd), formatDate(date, { month: "short", day: "numeric" })].filter(Boolean).join(" · ");
-    const locEl = document.createElement("div");
-    locEl.className = "pop-loc";
-    locEl.textContent = loc.label || "";
-    div.append(h4, meta, locEl);
-    marker.bindPopup(div, { maxWidth: 260 });
-    state.markers.addLayer(marker);
+// Build a GeoJSON FeatureCollection of deal points from {date, story, loc} items
+function dealsGeoJSON(items) {
+  return {
+    type: "FeatureCollection",
+    features: items.map(({ date, story, loc }) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [loc.lng, loc.lat] },
+      properties: {
+        date, id: story.id, title: story.title, type: story.dealType || "",
+        asset: story.assetClass || "", market: story.market || "",
+        value: story.valueUsd || 0, label: loc.label || "",
+      },
+    })),
+  };
+}
+
+// Aggregate deals to one soft "money" bubble per market (centroid + total $) —
+// the market-shading layer that answers "where is the capital going?"
+function marketsGeoJSON(items) {
+  const by = new Map();
+  for (const { story, loc } of items) {
+    const mk = story.market;
+    if (!mk || mk === "National") continue;
+    const g = by.get(mk) || { sumLat: 0, sumLng: 0, n: 0, total: 0, market: mk };
+    g.sumLat += loc.lat; g.sumLng += loc.lng; g.n++; g.total += story.valueUsd || 0;
+    by.set(mk, g);
   }
-  if (fit) requestAnimationFrame(() => {
-    state.map.invalidateSize();
-    if (pts.length > 1) state.map.fitBounds(pts, { padding: [36, 36] });
-    else if (pts.length === 1) state.map.setView(pts[0], 11);
-    else state.map.setView([39.5, -95], 4);
+  return {
+    type: "FeatureCollection",
+    features: [...by.values()].filter((g) => g.total > 0).map((g) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [g.sumLng / g.n, g.sumLat / g.n] },
+      properties: { market: g.market, total: g.total, count: g.n, totalLabel: fmtValue(g.total) || "" },
+    })),
+  };
+}
+
+function mapEnsureLayers() {
+  const map = state.map;
+  if (map.getSource("deals")) return;
+  const empty = { type: "FeatureCollection", features: [] };
+  map.addSource("markets", { type: "geojson", data: empty });
+  map.addSource("deals", { type: "geojson", data: empty });
+
+  // market "money" halo (behind deals)
+  map.addLayer({
+    id: "market-halo", type: "circle", source: "markets",
+    paint: {
+      "circle-radius": ["interpolate", ["linear"], ["sqrt", ["get", "total"]], 0, 18, 31623, 46, 200000, 78],
+      "circle-color": "#ffcf6b", "circle-opacity": 0.14, "circle-blur": 0.7,
+    },
   });
+  map.addLayer({
+    id: "market-label", type: "symbol", source: "markets",
+    layout: {
+      "text-field": ["concat", ["get", "market"], "  ", ["get", "totalLabel"]],
+      "text-size": 12, "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
+      "text-offset": [0, 0], "text-allow-overlap": false, "symbol-sort-key": ["-", 0, ["get", "total"]],
+    },
+    paint: { "text-color": "#fff3d6", "text-halo-color": "rgba(20,16,8,0.9)", "text-halo-width": 1.4 },
+  });
+
+  // deal dots
+  map.addLayer({
+    id: "deal-circle", type: "circle", source: "deals",
+    paint: {
+      "circle-radius": RADIUS_EXPR,
+      "circle-color": typeColorExpr(),
+      "circle-opacity": 0.9,
+      "circle-stroke-width": 1.6,
+      "circle-stroke-color": "#ffffff",
+      "circle-stroke-opacity": 0.85,
+    },
+  });
+
+  map.on("click", "deal-circle", (e) => { if (e.features?.[0]) openDealPopup(e.features[0]); });
+  map.on("click", "market-halo", (e) => {
+    // a deal dot on top owns the click — the halo only responds to empty space
+    if (map.queryRenderedFeatures(e.point, { layers: ["deal-circle"] }).length) return;
+    const mk = e.features?.[0]?.properties?.market;
+    if (mk) location.hash = `/market/${encodeURIComponent(mk)}`;
+  });
+  for (const layer of ["deal-circle", "market-halo", "market-label"]) {
+    map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+  }
+}
+
+function openDealPopup(feature) {
+  const p = feature.properties;
+  const t = typeInfo(p.type);
+  const div = document.createElement("div");
+  div.className = "map-popup";
+  const h4 = document.createElement("h4");
+  h4.textContent = p.title;
+  h4.addEventListener("click", () => { location.hash = `/story/${p.date}/${p.id}`; });
+  const meta = document.createElement("div");
+  meta.className = "pop-meta";
+  meta.textContent = [p.type ? `${t.emoji} ${p.type}` : null, p.asset, fmtValue(p.value), formatDate(p.date, { month: "short", day: "numeric" })].filter(Boolean).join(" · ");
+  div.append(h4, meta);
+  if (p.label) { const locEl = document.createElement("div"); locEl.className = "pop-loc"; locEl.textContent = p.label; div.appendChild(locEl); }
+  if (p.market) {
+    const mk = document.createElement("a");
+    mk.className = "pop-market";
+    mk.href = `#/market/${encodeURIComponent(p.market)}`;
+    mk.textContent = `View ${p.market} market ›`;
+    div.appendChild(mk);
+  }
+  state.mapPopup.setLngLat(feature.geometry.coordinates).setDOMContent(div).addTo(state.map);
+}
+
+function drawDeals(items, fit) {
+  if (!state.map?.getSource("deals")) return;
+  state.map.getSource("deals").setData(dealsGeoJSON(items));
+  // market halos only in aggregate modes (week / all), where they read as trend
+  const showMarkets = state.mapMode !== "day";
+  state.map.getSource("markets").setData(showMarkets ? marketsGeoJSON(items) : { type: "FeatureCollection", features: [] });
+  for (const l of ["market-halo", "market-label"]) {
+    if (state.map.getLayer(l)) state.map.setLayoutProperty(l, "visibility", showMarkets ? "visible" : "none");
+  }
+  if (fit) {
+    if (!items.length) { state.map.easeTo({ center: [-95, 39.5], zoom: 3.2, duration: 500 }); return; }
+    // A single offshore/international pin shouldn't zoom the whole world out —
+    // if the spread is transoceanic, anchor the fit on the US mainland cluster.
+    let pts = items;
+    const spanB = new mapboxgl.LngLatBounds();
+    for (const { loc } of items) spanB.extend([loc.lng, loc.lat]);
+    if (spanB.getEast() - spanB.getWest() > 100 || spanB.getNorth() - spanB.getSouth() > 60) {
+      const us = items.filter(({ loc }) => loc.lng >= -130 && loc.lng <= -60 && loc.lat >= 20 && loc.lat <= 52);
+      if (us.length) pts = us;
+    }
+    if (pts.length === 1) { state.map.easeTo({ center: [pts[0].loc.lng, pts[0].loc.lat], zoom: 10, duration: 600 }); return; }
+    const b = new mapboxgl.LngLatBounds();
+    for (const { loc } of pts) b.extend([loc.lng, loc.lat]);
+    state.map.fitBounds(b, { padding: 56, maxZoom: 12, duration: 700 });
+  }
 }
 
 function renderMapFilters(assets) {
@@ -1408,9 +1589,8 @@ function renderMapFilters(assets) {
     state.mapValueBand, (v) => { state.mapValueBand = v ? Number(v) : null; renderMap(); }));
 }
 
-/* All-time playback: pins accumulate week/day by day so you watch deal flow
-   spread across the map. Cumulative (not day-scrub) so sparse data reads as
-   growth, not flicker. */
+/* All-time playback: deals accumulate day by day so you watch flow spread across
+   the map. Cumulative (not day-scrub) so sparse data reads as growth. */
 let playTimer = null;
 function stopPlayback() {
   state.mapPlaying = false;
@@ -1425,7 +1605,7 @@ function renderPlayback(shown) {
   btn.className = "map-play-btn";
   btn.textContent = state.mapPlaying ? "⏸ Pause" : "▶ Play accumulation";
   btn.addEventListener("click", () => {
-    if (state.mapPlaying) { stopPlayback(); drawMapMarkers(shown, false); renderPlayback(shown); }
+    if (state.mapPlaying) { stopPlayback(); drawDeals(shown, false); renderPlayback(shown); }
     else { startPlayback(shown); renderPlayback(shown); }
   });
   const label = document.createElement("span");
@@ -1439,34 +1619,17 @@ function startPlayback(shown) {
   const days = [...byDate.keys()].sort();
   if (!days.length) return;
   state.mapPlaying = true;
-  state.markers.clearLayers();
   let i = 0; const acc = []; let sum = 0;
   const paint = () => { const l = $("map-play-label"); if (l) l.textContent = `${formatDate(days[Math.min(i, days.length - 1)], { month: "short", day: "numeric" })} · ${acc.length} deals · ${fmtValue(sum) || "$0"}`; };
   const step = () => {
     if (i >= days.length) { stopPlayback(); renderPlayback(shown); return; }
     for (const it of byDate.get(days[i])) { acc.push(it); sum += it.story.valueUsd || 0; }
-    drawMapMarkers(acc, i === 0);
+    drawDeals(acc.slice(), i === 0);
     paint();
     i++;
   };
   step();
   playTimer = setInterval(step, Math.max(450, Math.min(1400, Math.round(11000 / days.length))));
-}
-
-function addTileLayer() {
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  if (state.tiles) state.map.removeLayer(state.tiles);
-  // CARTO basemaps: retina ({r}) tiles, so no blur on 2x screens
-  state.tiles = L.tileLayer(
-    `https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`,
-    {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-      subdomains: "abcd",
-      maxZoom: 20,
-      keepBuffer: 6,          // keep tiles around the viewport so panning never blanks
-      updateWhenZooming: false, // don't re-request mid-pinch; settle, then load
-    }
-  ).addTo(state.map);
 }
 
 function renderMapLegend(typeTally) {
@@ -1482,7 +1645,6 @@ function renderMapLegend(typeTally) {
     b.textContent = `${t.emoji} ${name} ${n}`;
     if (!off) b.style.borderColor = t.color + "88";
     b.addEventListener("click", () => {
-      // tap = solo this type; tap again = show all
       if (state.mapTypeFilter && state.mapTypeFilter.size === 1 && state.mapTypeFilter.has(name)) {
         state.mapTypeFilter = null;
       } else {
@@ -2239,39 +2401,573 @@ function leagueRow({ p, count, volume }, rank) {
   return el;
 }
 
+/* ---------- The Desk: a ranked board of tools ----------
+   Every analytical surface is a tap-through card (same language as Calendar and
+   Story Arcs), ordered by strength/interest — the macro backdrop first, then the
+   numbers that sharpen as coverage accumulates. Each opens its own full board. */
+const DESK_CATALOG = [
+  { id: "pulse", icon: "📈", title: "Market Pulse", blurb: "The national backdrop — rates, home prices, rents, credit — in deep, real data" },
+  { id: "comps", icon: "🏙️", title: "Comps", blurb: "$/sf and $/unit medians, delineated by market and asset class" },
+  { id: "caprates", icon: "🎯", title: "Cap Rates", blurb: "What each market is pricing, straight from deal coverage" },
+  { id: "league", icon: "🏆", title: "League Tables", blurb: "Most-active buyers, lenders, developers and brokers" },
+  { id: "metrics", icon: "📊", title: "Market Metrics", blurb: "Figures the trade press cites — delinquency, vacancy, rents" },
+  { id: "distress", icon: "⚠️", title: "Distress Watch", blurb: "Defaults, foreclosures and forced sales as they surface" },
+  { id: "coverage", icon: "🔥", title: "Coverage Pulse", blurb: "What the desks are covering this week versus last" },
+  { id: "ledger", icon: "💵", title: "Deal Ledger", blurb: "Every priced deal, filterable and sortable" },
+  { id: "calendar", icon: "📅", title: "Calendar", blurb: "Upcoming catalysts — auctions, court dates, Fed decisions", hash: "#/calendar" },
+  { id: "threads", icon: "🧵", title: "Story Arcs", blurb: "Running storylines the briefing is tracking", hash: "#/threads" },
+];
+
 async function renderTrends() {
   const wrap = $("trends-content");
   wrap.innerHTML = "";
-
   wrap.appendChild(pageHead("The Desk",
-    "The analytical layer. Comps are grouped by market and asset class — a median across unlike deals in different cities is noise, not a rate — and everything sharpens as coverage accumulates. Each section opens and closes."));
-
-  // nav buttons to the two views with no tab (Calendar, Story Arcs) — arcs live
-  // ONLY here now, not as a duplicate list further down the page
-  wrap.appendChild(deskLinks());
+    "The market's macro backdrop and every number the briefing accumulates — each board a tap away."));
 
   const days = await getAllDays();
   const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })));
-  if (!stories.length) {
-    const p = document.createElement("p");
-    p.style.cssText = "font-style:italic;color:var(--ink-2);padding:40px 0;text-align:center";
-    p.textContent = "The Desk fills as briefings accumulate.";
-    wrap.appendChild(p);
-    return;
-  }
-
   const priced = stories.filter((s) => s.valueUsd);
   const metrics = await getMetrics();
   const players = await getPlayers();
-  const distress = stories.filter((s) => s.dealType === "Distress").sort((a, b) => b._date.localeCompare(a._date));
+  const events = await getEvents();
+  const threads = await getThreads();
+  const pulse = await getPulse();
+  const distress = stories.filter((s) => s.dealType === "Distress");
 
-  wrap.appendChild(deskSection("comps", "Comps — by market", null, true, (b) => buildComps(b, priced)));
-  wrap.appendChild(deskSection("caprates", "Cap Rates — by market", null, true, (b) => buildCapRates(b, stories)));
-  wrap.appendChild(deskSection("league", "League Tables", null, false, (b) => buildLeagueTables(b, players)));
-  wrap.appendChild(deskSection("metrics", "Market Metrics", metrics.length || null, true, (b) => buildMetrics(b, metrics)));
-  if (distress.length) wrap.appendChild(deskSection("distress", "Distress Watch", distress.length, false, (b) => buildDistress(b, distress)));
-  wrap.appendChild(deskSection("pulse", "Coverage Pulse", null, false, (b) => buildPulse(b, stories)));
-  wrap.appendChild(deskSection("ledger", "All priced deals", priced.length, false, (b) => buildLedger(b, priced)));
+  const stat = {
+    pulse: pulse?.national ? `${Object.keys(pulse.national).length} indicators live` : "live data",
+    comps: `${new Set(priced.map((s) => s.market).filter(Boolean)).size} markets`,
+    caprates: `${stories.filter((s) => capRateOf(s)).length} rates`,
+    league: `${players.size} players`,
+    metrics: `${metrics.length} series`,
+    distress: `${distress.length} on watch`,
+    coverage: `${stories.length} stories`,
+    ledger: `${priced.length} priced deals`,
+    calendar: `${events.filter((e) => (e.date || "") >= todayISO() && !e.resolvedBy).length} upcoming`,
+    threads: `${threads.filter((t) => t.status !== "resolved").length} active`,
+  };
+
+  const grid = document.createElement("div");
+  grid.className = "desk-grid";
+  for (const item of DESK_CATALOG) grid.appendChild(deskCard(item, stat[item.id]));
+  wrap.appendChild(grid);
+}
+
+function deskCard(item, stat) {
+  const a = document.createElement("a");
+  a.className = "desk-card" + (item.id === "pulse" ? " dc-feature" : "");
+  a.href = item.hash || `#/desk/${item.id}`;
+  a.innerHTML =
+    `<span class="dc-icon">${item.icon}</span>` +
+    `<span class="dc-body"><span class="dc-title">${item.title}</span>` +
+    `<span class="dc-blurb">${item.blurb}</span></span>` +
+    `<span class="dc-foot"><span class="dc-stat">${stat || ""}</span><span class="dc-arrow">›</span></span>`;
+  return a;
+}
+
+async function renderDeskSection(id) {
+  const wrap = $("trends-content");
+  wrap.innerHTML = "";
+  wrap.appendChild(backLink("The Desk", "#/trends"));
+  const item = DESK_CATALOG.find((x) => x.id === id);
+  if (!item) { wrap.appendChild(emptyPanel("Not found", "That board isn't here.")); return; }
+
+  if (id === "pulse") {
+    wrap.appendChild(pageHead("Market Pulse",
+      "The national market read, pooled from public data the trade shops themselves quote — the Fed's rate and credit series, Case-Shiller home prices, and Zillow's market-by-market rents. Tap any signal for its full history."));
+    const pulse = await getPulse();
+    buildMarketPulse(wrap, pulse);
+    return;
+  }
+
+  wrap.appendChild(pageHead(item.title, item.blurb));
+  const days = await getAllDays();
+  const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })));
+  const priced = stories.filter((s) => s.valueUsd);
+  const body = document.createElement("div");
+  body.className = "desk-page";
+  wrap.appendChild(body);
+  if (!stories.length && id !== "metrics") {
+    body.appendChild(emptyPanel("Nothing here yet", "This board fills as briefings accumulate."));
+    return;
+  }
+  switch (id) {
+    case "comps": buildComps(body, priced); break;
+    case "caprates": buildCapRates(body, stories); break;
+    case "league": buildLeagueTables(body, await getPlayers()); break;
+    case "metrics": buildMetrics(body, await getMetrics()); break;
+    case "distress": buildDistress(body, distressStories(stories)); break;
+    case "coverage": buildPulse(body, stories); break;
+    case "ledger": buildLedger(body, priced); break;
+  }
+}
+
+function distressStories(stories) {
+  return stories.filter((s) => s.dealType === "Distress").sort((a, b) => b._date.localeCompare(a._date));
+}
+
+/* ---------- Market Pulse: the national backdrop ----------
+   One read on the whole market, built from FRED (rates/credit/prices/housing)
+   and Zillow (rents/values) via the market-pulse edge function. A computed
+   verdict up top, signal tiles grouped by theme, each opening a scrubbable
+   multi-year chart, then a by-market board that flows into the Market pages. */
+const PULSE_NEUTRAL = new Set(["ust10y", "ust2y", "spread", "fedfunds"]);
+const PULSE_GROUPS = [["rates", "Rates & Credit"], ["housing", "Housing & Rents"], ["economy", "Economy"]];
+
+function fmtMoney(v) {
+  if (v == null) return "—";
+  if (Math.abs(v) >= 1e6) return "$" + (v / 1e6).toFixed(2).replace(/\.00$/, "") + "M";
+  if (Math.abs(v) >= 1e5) return "$" + Math.round(v / 1e3) + "K";
+  return "$" + Math.round(v).toLocaleString();
+}
+
+function fmtPulseLevel(v, unit) {
+  if (v == null) return "—";
+  if (unit === "%") return v.toFixed(2) + "%";
+  if (unit === "$") return fmtMoney(v);
+  if (unit === "K") return (v / 1000).toFixed(2) + "M";
+  if (unit === "M") return (v / 1e6).toFixed(2) + "M";
+  if (unit === "index") return v.toFixed(1);
+  return String(v);
+}
+
+function signed(n, digits = 1) { return (n >= 0 ? "+" : "") + n.toFixed(digits); }
+
+function buildMarketPulse(wrap, pulse) {
+  if (!pulse?.national || !Object.keys(pulse.national).length) {
+    wrap.appendChild(emptyPanel("Market Pulse is warming up",
+      "The national data feed refreshes a few times a day. Check back shortly."));
+    return;
+  }
+  const n = pulse.national;
+
+  // computed verdict
+  const verdict = computeVerdict(pulse);
+  const vb = document.createElement("div");
+  vb.className = "pulse-verdict " + verdict.tone;
+  vb.innerHTML = `<span class="pv-kicker">The read</span><p class="pv-text">${verdict.text}</p>`;
+  wrap.appendChild(vb);
+
+  // if a signal's chart is open, show it up top
+  const openSeries = resolvePulseSeries(pulse, state.pulseKey);
+  if (openSeries) wrap.appendChild(pulseChartPanel(openSeries));
+
+  // group tabs
+  const tabs = document.createElement("div");
+  tabs.className = "pulse-tabs";
+  for (const [g, label] of PULSE_GROUPS) {
+    const b = document.createElement("button");
+    b.className = "pulse-tab" + (state.pulseGroup === g ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => { state.pulseGroup = g; route(); });
+    tabs.appendChild(b);
+  }
+  wrap.appendChild(tabs);
+
+  // signal tiles for the active group
+  const grid = document.createElement("div");
+  grid.className = "pulse-grid";
+  const order = pulse.order || Object.keys(n);
+  for (const key of order) {
+    const s = n[key];
+    if (!s || s.group !== state.pulseGroup) continue;
+    grid.appendChild(pulseTile(s));
+  }
+  // fold Zillow national rent/value into the housing group
+  if (state.pulseGroup === "housing" && pulse.zillowNational) {
+    if (pulse.zillowNational.rent) grid.appendChild(pulseZillowTile("National Rent (Zillow)", "rent", pulse.zillowNational.rent));
+    if (pulse.zillowNational.value) grid.appendChild(pulseZillowTile("Home Value (Zillow)", "value", pulse.zillowNational.value));
+  }
+  wrap.appendChild(grid);
+
+  // by-market board → each flows into a full Market page
+  wrap.appendChild(subHead("By market", "Home prices, rents and values across the metros the briefing covers"));
+  const markets = document.createElement("div");
+  markets.className = "pulse-markets";
+  const metroOrder = Object.entries(pulse.metros || {}).sort((a, b) =>
+    a[0] === "New York" ? -1 : b[0] === "New York" ? 1 : a[0].localeCompare(b[0]));
+  for (const [name, md] of metroOrder) markets.appendChild(pulseMarketRow(name, md));
+  wrap.appendChild(markets);
+
+  const note = document.createElement("p");
+  note.className = "trends-note";
+  const when = pulse.generatedAt ? formatDate(pulse.generatedAt.slice(0, 10), { month: "short", day: "numeric" }) : "";
+  note.textContent = `Sources: ${(pulse.sources || []).join(", ")}. Refreshed ${when}. Free public data — the same series the trade press cites, not a licensed CoStar feed.`;
+  wrap.appendChild(note);
+}
+
+/* Change indicator for a tile. NOTE: `s.yoy` is the computed YoY *number* (the
+   edge function's series() field), not a flag. Rule: %-level series (rates,
+   credit, vacancy, unemployment) show their change vs the prior print; every
+   other unit ($/index/K/M) tells its story in year-over-year terms.
+   Returns { txt, cls, up } — `up` is the value's direction (drives the arrow),
+   `cls` is good/bad/flat (drives the color). */
+function pulseDelta(s) {
+  const neutral = PULSE_NEUTRAL.has(s.key);
+  if (s.unit !== "%") {
+    if (s.yoy == null) return null;
+    const up = s.yoy >= 0;
+    const good = s.invert ? s.yoy < 0 : s.yoy > 0;
+    return { txt: `${signed(s.yoy)}% YoY`, cls: neutral ? "flat" : good ? "good" : "bad", up };
+  }
+  if (!s.latest || !s.prev) return null;
+  const d = s.latest.value - s.prev.value;
+  if (Math.abs(d) < 1e-9) return { txt: "flat", cls: "flat", up: true, noArrow: true };
+  const up = d >= 0;
+  const good = s.invert ? d < 0 : d > 0;
+  const cls = neutral ? "flat" : good ? "good" : "bad";
+  const bp = Math.round(d * 100);
+  return { txt: `${d >= 0 ? "+" : ""}${bp} bp`, cls, up };
+}
+
+function pulseTile(s) {
+  const el = document.createElement("button");
+  el.className = "pulse-tile" + (state.pulseKey === s.key ? " on" : "");
+  el.addEventListener("click", () => { state.pulseKey = state.pulseKey === s.key ? null : s.key; route(); });
+
+  // for index series the headline number is the YoY, not the meaningless level
+  const big = s.unit === "index" && s.yoy != null ? `${signed(s.yoy)}%` : fmtPulseLevel(s.latest?.value, s.unit);
+
+  const l = document.createElement("div"); l.className = "pt-label"; l.textContent = s.short;
+  const v = document.createElement("div"); v.className = "pt-value"; v.textContent = big;
+  el.append(l, v);
+
+  const c = document.createElement("div");
+  if (s.unit === "index") {
+    c.className = "pt-chg sub"; c.textContent = "year-over-year";
+  } else {
+    const d = pulseDelta(s);
+    if (d) { c.className = "pt-chg " + d.cls; c.textContent = (d.noArrow ? "" : d.up ? "▲ " : "▼ ") + d.txt; }
+  }
+  if (c.textContent) el.appendChild(c);
+  if (s.history?.length > 1) el.appendChild(miniSpark(s.history, s.invert));
+  return el;
+}
+
+function pulseZillowTile(label, kind, s) {
+  const el = document.createElement("button");
+  const vk = "zil_" + kind;
+  el.className = "pulse-tile" + (state.pulseKey === vk ? " on" : "");
+  el.addEventListener("click", () => { state.pulseKey = state.pulseKey === vk ? null : vk; route(); });
+  const l = document.createElement("div"); l.className = "pt-label"; l.textContent = label;
+  const v = document.createElement("div"); v.className = "pt-value"; v.textContent = fmtMoney(s.latest?.value);
+  el.append(l, v);
+  if (s.yoy != null) {
+    const good = s.yoy > 0;
+    const c = document.createElement("div"); c.className = "pt-chg " + (good ? "good" : "bad");
+    c.textContent = (good ? "▲ " : "▼ ") + `${signed(s.yoy)}% YoY`;
+    el.appendChild(c);
+  }
+  if (s.history?.length > 1) el.appendChild(miniSpark(s.history, false));
+  return el;
+}
+
+function resolvePulseSeries(pulse, key) {
+  if (!key || !pulse) return null;
+  if (pulse.national?.[key]) return pulse.national[key];
+  if (key === "zil_rent" && pulse.zillowNational?.rent) return { key, label: "National Rent (Zillow)", short: "National Rent", unit: "$", ...pulse.zillowNational.rent };
+  if (key === "zil_value" && pulse.zillowNational?.value) return { key, label: "Home Value (Zillow)", short: "Home Value", unit: "$", ...pulse.zillowNational.value };
+  return null;
+}
+
+function pulseChartPanel(s) {
+  const panel = document.createElement("div");
+  panel.className = "pulse-chart-panel";
+  const head = document.createElement("div");
+  head.className = "pcp-head";
+  const title = document.createElement("div"); title.className = "pcp-title"; title.textContent = s.label || s.short;
+  const close = document.createElement("button"); close.className = "pcp-close"; close.textContent = "✕";
+  close.setAttribute("aria-label", "Close chart");
+  close.addEventListener("click", () => { state.pulseKey = null; route(); });
+  head.append(title, close);
+  panel.appendChild(head);
+
+  // range selector
+  const ranges = [[24, "2Y"], [60, "5Y"], [120, "Max"]];
+  const rbar = document.createElement("div"); rbar.className = "pcp-ranges";
+  for (const [mo, label] of ranges) {
+    const b = document.createElement("button");
+    b.className = "pcp-range" + (state.pulseRange === mo ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => { state.pulseRange = mo; route(); });
+    rbar.appendChild(b);
+  }
+  panel.appendChild(rbar);
+
+  const chart = document.createElement("div"); chart.className = "curve-wrap";
+  chart.appendChild(buildPulseChart(s.history || [], { unit: s.unit, months: state.pulseRange, yoy: s.yoy != null }));
+  panel.appendChild(chart);
+  return panel;
+}
+
+function pulseMarketRow(name, md) {
+  const el = document.createElement("a");
+  el.className = "pmk-row";
+  el.href = `#/market/${encodeURIComponent(name)}`;
+  const nm = document.createElement("div"); nm.className = "pmk-name"; nm.textContent = name;
+  const stats = document.createElement("div"); stats.className = "pmk-stats";
+  const stat = (label, val, yoy) => {
+    if (val == null) return;
+    const c = document.createElement("div"); c.className = "pmk-stat";
+    let sub = "";
+    if (yoy != null) { const g = yoy >= 0; sub = `<span class="pmk-yoy ${g ? "good" : "bad"}">${signed(yoy)}%</span>`; }
+    c.innerHTML = `<span class="pmk-k">${label}</span><span class="pmk-v">${val}</span>${sub}`;
+    stats.appendChild(c);
+  };
+  if (md.rent) stat("Rent", fmtMoney(md.rent.latest?.value), md.rent.yoy);
+  if (md.value) stat("Value", fmtMoney(md.value.latest?.value), md.value.yoy);
+  if (md.caseShiller) stat("Prices", null, md.caseShiller.yoy); // YoY-only shown as its own
+  if (md.caseShiller && md.caseShiller.yoy != null) {
+    const c = document.createElement("div"); c.className = "pmk-stat";
+    const g = md.caseShiller.yoy >= 0;
+    c.innerHTML = `<span class="pmk-k">Case-Shiller</span><span class="pmk-v ${g ? "good" : "bad"}">${signed(md.caseShiller.yoy)}%</span>`;
+    stats.appendChild(c);
+  }
+  const arrow = document.createElement("span"); arrow.className = "pmk-arrow"; arrow.textContent = "›";
+  el.append(nm, stats, arrow);
+  return el;
+}
+
+/* compact inline sparkline (no axes) for pulse tiles */
+function miniSpark(hist, invert) {
+  const pts = (hist || []).filter((p) => typeof p.value === "number").slice(-36);
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "pt-spark");
+  svg.setAttribute("viewBox", "0 0 100 28");
+  svg.setAttribute("preserveAspectRatio", "none");
+  if (pts.length < 2) return svg;
+  const xs = pts.map((_, i) => (i / (pts.length - 1)) * 100);
+  const vals = pts.map((p) => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const ys = vals.map((v) => 26 - ((v - lo) / (hi - lo || 1)) * 24);
+  const rising = vals[vals.length - 1] >= vals[0];
+  const good = invert ? !rising : rising;
+  const cls = good ? "spark-good" : "spark-bad";
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", xs.map((x, i) => `${i ? "L" : "M"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" "));
+  path.setAttribute("class", "pt-spark-line " + cls);
+  path.setAttribute("fill", "none");
+  svg.appendChild(path);
+  return svg;
+}
+
+function computeVerdict(p) {
+  const n = p.national || {};
+  const bits = [];
+  let easing = 0, tightening = 0;
+  const mort = n.mortgage30;
+  if (mort?.latest) {
+    const d = mort.latest.value - (mort.prev?.value ?? mort.latest.value);
+    if (d < -0.02) { bits.push(`30-year mortgages are easing to ${mort.latest.value.toFixed(2)}%`); easing++; }
+    else if (d > 0.02) { bits.push(`30-year mortgages have climbed to ${mort.latest.value.toFixed(2)}%`); tightening++; }
+    else bits.push(`30-year mortgages are holding near ${mort.latest.value.toFixed(2)}%`);
+  }
+  const hpi = n.hpi;
+  if (hpi?.yoy != null) {
+    bits.push(hpi.yoy > 4 ? `home prices are still rising (${signed(hpi.yoy)}% YoY)`
+      : hpi.yoy > 0.5 ? `home-price growth has cooled to ${signed(hpi.yoy)}% YoY`
+      : hpi.yoy > -0.5 ? "home prices have gone flat" : `home prices are slipping (${signed(hpi.yoy)}% YoY)`);
+  }
+  const rent = p.zillowNational?.rent;
+  if (rent?.yoy != null) {
+    bits.push(rent.yoy > 4 ? `rents are running hot (${signed(rent.yoy)}% YoY)`
+      : rent.yoy > 1.5 ? `rent growth is moderating (${signed(rent.yoy)}% YoY)`
+      : `rents are soft (${signed(rent.yoy)}% YoY)`);
+  }
+  const cre = n.cre_delinq;
+  if (cre?.latest) {
+    const d = cre.latest.value - (cre.prev?.value ?? cre.latest.value);
+    if (d > 0.03) { bits.push(`and CRE loan delinquency is grinding higher to ${cre.latest.value.toFixed(1)}%`); tightening++; }
+    else if (cre.latest.value > 1.2) bits.push(`with CRE loan delinquency elevated at ${cre.latest.value.toFixed(1)}%`);
+  }
+  let text = bits.join("; ").replace("; and", ", and");
+  text = text.charAt(0).toUpperCase() + text.slice(1) + ".";
+  const tone = tightening > easing ? "tight" : easing > tightening ? "easy" : "mixed";
+  return { text, tone };
+}
+
+/* generalized scrubbable line chart for a Market Pulse series (reuses attachScrub) */
+function buildPulseChart(history, opts) {
+  const unit = opts.unit;
+  const months = opts.months || 60;
+  const cut = new Date(); cut.setMonth(cut.getMonth() - months);
+  const cutIso = cut.toISOString().slice(0, 10);
+  const pts = (history || []).filter((p) => typeof p.value === "number" && p.date >= cutIso);
+  if (pts.length < 2) {
+    const el = document.createElement("p");
+    el.style.cssText = "font-style:italic;color:var(--ink-2);padding:26px 10px";
+    el.textContent = "Not enough history for this range.";
+    return el;
+  }
+  const fmtV = (v) => unit === "%" ? v.toFixed(2) : unit === "$" ? fmtMoney(v) : unit === "K" ? (v / 1000).toFixed(1) + "M" : unit === "M" ? (v / 1e6).toFixed(1) + "M" : v.toFixed(0);
+  const fmtAxis = (v) => unit === "%" ? v.toFixed(2) : unit === "$" ? (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + "M" : Math.round(v / 1e3) + "K") : unit === "K" ? (v / 1000).toFixed(1) : unit === "M" ? (v / 1e6).toFixed(1) : Math.round(v).toString();
+
+  const mobile = matchMedia("(max-width: 700px)").matches;
+  const k = mobile ? 1.9 : 1;
+  const W = 680, H = mobile ? 545 : 320;
+  const padL = 52 * (mobile ? 1.5 : 1), padR = 54 * k * 0.6, padT = 20 * k, padB = 32 * k;
+  const fs = { axis: 10 * k, value: 11 * k };
+  const t0 = Date.parse(pts[0].date), t1 = Date.parse(pts[pts.length - 1].date);
+  const xs = (d) => padL + (Date.parse(d) - t0) / (t1 - t0 || 1) * (W - padL - padR);
+  const vals = pts.map((p) => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.05 || 1;
+  const yMin = lo - pad, yMax = hi + pad;
+  const ys = (v) => padT + (yMax - v) / (yMax - yMin || 1) * (H - padT - padB);
+
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img");
+  const put = (tag, attrs, text) => {
+    const el = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) el.setAttribute(a, v);
+    if (text != null) el.textContent = text;
+    svg.appendChild(el);
+    return el;
+  };
+  // gridlines (5 steps)
+  for (let i = 0; i <= 4; i++) {
+    const gv = yMin + (i / 4) * (yMax - yMin);
+    put("line", { x1: padL, x2: W - padR, y1: ys(gv), y2: ys(gv), class: "cv-grid" });
+    put("text", { x: padL - 8, y: ys(gv) + fs.axis * 0.34, class: "cv-ylabel", "text-anchor": "end", "font-size": fs.axis }, fmtAxis(gv));
+  }
+  // date labels
+  const fmtD = (d) => new Date(Date.parse(d)).toLocaleDateString("en-US", months <= 24 ? { month: "short", year: "2-digit" } : { year: "numeric" });
+  for (let i = 0; i < 4; i++) {
+    const p = pts[Math.round(i * (pts.length - 1) / 3)];
+    put("text", { x: xs(p.date), y: H - 10, class: "cv-xlabel", "text-anchor": i === 0 ? "start" : i === 3 ? "end" : "middle", "font-size": fs.axis }, fmtD(p.date));
+  }
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${xs(p.date).toFixed(1)},${ys(p.value).toFixed(1)}`).join(" ");
+  put("path", { d, class: "cv-line", "stroke-width": 2 * k });
+  const last = pts[pts.length - 1];
+  put("circle", { cx: xs(last.date), cy: ys(last.value), r: 4.5 * k, class: "cv-dot key", "stroke-width": 2 * k });
+  put("text", { x: xs(last.date) + 8 * k, y: ys(last.value) + fs.value * 0.34, class: "cv-vlabel", "text-anchor": "start", "font-size": fs.value }, fmtV(last.value));
+
+  attachScrub(svg, pts.map((p) => ({
+    x: xs(p.date), y: ys(p.value),
+    label: formatDate(p.date, { month: "short", year: "numeric" }),
+    value: fmtV(p.value) + (unit === "%" ? "%" : ""),
+  })), { W, H, padT, padB, padL, padR, k });
+  return svg;
+}
+
+/* ---------- Market page: internal + external for one metro ----------
+   The join key across the app is `market`. This page unifies what the briefing
+   has tracked in a metro (comps, cap rates, deals) with the external backdrop
+   (Zillow rents/values, Case-Shiller). Reached from Market Pulse, the map, and
+   the comps board — so the same market always resolves to one place. */
+async function renderMarketPage(name) {
+  const wrap = $("market-content");
+  wrap.innerHTML = "";
+  wrap.appendChild(backLink("Market Pulse", "#/desk/pulse"));
+  wrap.appendChild(pageHead(name,
+    "Everything the briefing knows about this market — the external backdrop and every deal tracked here."));
+
+  const pulse = await getPulse();
+  const md = pulse?.metros?.[name];
+
+  // open external chart, if any
+  const series = md && state.marketMetric ? ({
+    rent: md.rent && { label: `${name} — Median Rent`, unit: "$", ...md.rent },
+    value: md.value && { label: `${name} — Home Value`, unit: "$", ...md.value },
+    cs: md.caseShiller && { label: `${name} — Case-Shiller Index`, unit: "index", ...md.caseShiller },
+  })[state.marketMetric] : null;
+  if (series) wrap.appendChild(marketChartPanel(series));
+
+  // external backdrop tiles
+  if (md && (md.rent || md.value || md.caseShiller)) {
+    wrap.appendChild(subHead("Market backdrop", "Zillow rents & values and Case-Shiller prices — free public data"));
+    const ext = document.createElement("div");
+    ext.className = "pulse-grid";
+    if (md.rent) ext.appendChild(marketStatTile("rent", "Median Rent", fmtMoney(md.rent.latest?.value), md.rent.yoy, md.rent.history, false));
+    if (md.value) ext.appendChild(marketStatTile("value", "Home Value", fmtMoney(md.value.latest?.value), md.value.yoy, md.value.history, false));
+    if (md.caseShiller) ext.appendChild(marketStatTile("cs", "Case-Shiller", `${signed(md.caseShiller.yoy || 0)}%`, md.caseShiller.yoy, md.caseShiller.history, false, "YoY"));
+    wrap.appendChild(ext);
+  }
+
+  // internal: this market's deals
+  const days = await getAllDays();
+  const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })))
+    .filter((s) => s.market === name);
+  const priced = stories.filter((s) => s.valueUsd);
+
+  wrap.appendChild(subHead("What we've tracked here", `${stories.length} stor${stories.length === 1 ? "y" : "ies"} · ${priced.length} priced deal${priced.length === 1 ? "" : "s"}`));
+
+  // internal medians (comps + cap rate)
+  const psfs = priced.map(compPsf).filter((v) => v);
+  const punits = priced.map(compPunit).filter((v) => v);
+  const caps = stories.map((s) => capRateOf(s)).filter(Boolean).map((c) => c.v);
+  const medianRow = document.createElement("div");
+  medianRow.className = "market-medians";
+  const mtile = (label, val, sub) => {
+    const d = document.createElement("div"); d.className = "mm-tile";
+    d.innerHTML = `<div class="mm-k">${label}</div><div class="mm-v">${val}</div><div class="mm-sub">${sub}</div>`;
+    return d;
+  };
+  if (punits.length >= 3) medianRow.appendChild(mtile("Median $/unit", "$" + Math.round(median(punits)).toLocaleString(), `n=${punits.length}`));
+  if (psfs.length >= 3) medianRow.appendChild(mtile("Median $/sf", "$" + Math.round(median(psfs)).toLocaleString(), `n=${psfs.length}`));
+  if (caps.length >= 3) medianRow.appendChild(mtile("Median cap", median(caps).toFixed(1) + "%", `n=${caps.length}`));
+  if (priced.length) {
+    const total = priced.reduce((s, d) => s + (d.valueUsd || 0), 0);
+    medianRow.appendChild(mtile("Tracked volume", fmtValue(total) || "—", `${priced.length} deals`));
+  }
+  if (medianRow.children.length) wrap.appendChild(medianRow);
+
+  // recent deals
+  if (priced.length) {
+    const list = document.createElement("div"); list.className = "ledger-list";
+    for (const s of [...priced].sort((a, b) => b._date.localeCompare(a._date) || (b.valueUsd - a.valueUsd)).slice(0, 40)) {
+      list.appendChild(ledgerRow(s));
+    }
+    wrap.appendChild(list);
+  } else {
+    wrap.appendChild(emptyPanel("No priced deals tracked here yet", "As the briefing covers deals in this market, they collect here alongside the external backdrop."));
+  }
+}
+
+function marketStatTile(metric, label, val, yoy, history, invert, suffix) {
+  const el = document.createElement("button");
+  el.className = "pulse-tile" + (state.marketMetric === metric ? " on" : "");
+  el.addEventListener("click", () => { state.marketMetric = state.marketMetric === metric ? null : metric; route(); });
+  const l = document.createElement("div"); l.className = "pt-label"; l.textContent = label;
+  const v = document.createElement("div"); v.className = "pt-value"; v.textContent = val;
+  el.append(l, v);
+  if (yoy != null) {
+    const good = yoy >= 0;
+    const c = document.createElement("div"); c.className = "pt-chg " + (good ? "good" : "bad");
+    c.textContent = (good ? "▲ " : "▼ ") + `${signed(yoy)}% ${suffix || "YoY"}`;
+    el.appendChild(c);
+  }
+  if (history?.length > 1) el.appendChild(miniSpark(history, invert));
+  return el;
+}
+
+function marketChartPanel(s) {
+  const panel = document.createElement("div");
+  panel.className = "pulse-chart-panel";
+  const head = document.createElement("div"); head.className = "pcp-head";
+  const title = document.createElement("div"); title.className = "pcp-title"; title.textContent = s.label;
+  const close = document.createElement("button"); close.className = "pcp-close"; close.textContent = "✕";
+  close.setAttribute("aria-label", "Close chart");
+  close.addEventListener("click", () => { state.marketMetric = null; route(); });
+  head.append(title, close);
+  panel.appendChild(head);
+  const ranges = [[24, "2Y"], [60, "5Y"], [120, "Max"]];
+  const rbar = document.createElement("div"); rbar.className = "pcp-ranges";
+  for (const [mo, label] of ranges) {
+    const b = document.createElement("button");
+    b.className = "pcp-range" + (state.marketRange === mo ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => { state.marketRange = mo; route(); });
+    rbar.appendChild(b);
+  }
+  panel.appendChild(rbar);
+  const chart = document.createElement("div"); chart.className = "curve-wrap";
+  chart.appendChild(buildPulseChart(s.history || [], { unit: s.unit, months: state.marketRange, yoy: s.yoy != null }));
+  panel.appendChild(chart);
+  return panel;
 }
 
 /* ---------- players ---------- */

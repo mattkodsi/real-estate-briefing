@@ -2602,3 +2602,184 @@ button.cal-open:active { background: var(--rule); }
 @media (prefers-color-scheme: dark) { .metric-delta.up { color: #ff7b6e; } .metric-delta.down { color: #5bd07f; } }
 .sparkline { display: block; width: 100%; height: 30px; margin: 8px 0 6px; }
 .metric-meta { font-size: 10.5px; color: var(--ink-3); line-height: 1.45; }
+
+/* ============================================================
+   The Desk — ranked board of tool cards
+   ============================================================ */
+.desk-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+.desk-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 14px;
+  background: var(--box);
+  padding: 14px;
+  text-decoration: none;
+  color: var(--ink);
+  min-height: 118px;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.14s, transform 0.06s;
+}
+.desk-card:active { transform: scale(0.985); background: var(--rule); }
+.desk-card:hover { border-color: var(--ink-3); }
+.desk-card .dc-icon { font-size: 24px; line-height: 1; }
+.desk-card .dc-body { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.desk-card .dc-title { font-size: 15px; font-weight: 700; letter-spacing: -0.2px; }
+.desk-card .dc-blurb { font-size: 11.5px; color: var(--ink-3); line-height: 1.4; }
+.desk-card .dc-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.desk-card .dc-stat { font-size: 11px; font-weight: 600; color: var(--ink-2); }
+.desk-card .dc-arrow { color: var(--ink-3); font-size: 18px; }
+/* flagship card spans the row, laid out horizontally */
+.desk-card.dc-feature {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  min-height: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, var(--box)), var(--box));
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--rule));
+}
+.desk-card.dc-feature .dc-icon { font-size: 30px; }
+.desk-card.dc-feature .dc-body { gap: 4px; }
+.desk-card.dc-feature .dc-title { font-size: 18px; font-family: var(--serif); }
+.desk-card.dc-feature .dc-blurb { font-size: 12.5px; }
+.desk-card.dc-feature .dc-foot { flex-direction: column; align-items: flex-end; gap: 2px; margin: 0; }
+.desk-page { margin-top: 4px; }
+
+/* ============================================================
+   Market Pulse
+   ============================================================ */
+.pulse-verdict {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--ink-3);
+  border-radius: 12px;
+  background: var(--box);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.pulse-verdict.easy { border-left-color: #1e8e3e; }
+.pulse-verdict.tight { border-left-color: #d23f31; }
+.pulse-verdict.mixed { border-left-color: var(--accent); }
+.pv-kicker {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase;
+  color: var(--ink-3); display: block; margin-bottom: 6px;
+}
+.pv-text { font-size: 15px; line-height: 1.5; color: var(--ink); font-family: var(--serif); }
+
+.pulse-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.pulse-tab {
+  font-size: 12px; font-weight: 600; padding: 7px 13px;
+  border: 1px solid var(--rule); border-radius: 999px;
+  color: var(--ink-2); background: var(--box);
+  -webkit-tap-highlight-color: transparent;
+}
+.pulse-tab.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+.pulse-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 9px;
+  margin-bottom: 20px;
+}
+.pulse-tile {
+  display: flex; flex-direction: column; gap: 2px;
+  border: 1px solid var(--rule); border-radius: 12px;
+  background: var(--box); padding: 12px 13px 10px;
+  text-align: left; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.14s, transform 0.06s;
+}
+.pulse-tile:active { transform: scale(0.985); }
+.pulse-tile.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.pt-label { font-size: 11.5px; color: var(--ink-2); font-weight: 600; }
+.pt-value { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; margin-top: 1px; }
+.pt-chg { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pt-chg.good { color: #1e8e3e; }
+.pt-chg.bad { color: #d23f31; }
+.pt-chg.flat, .pt-chg.sub { color: var(--ink-3); font-weight: 500; }
+.pt-spark { width: 100%; height: 26px; margin-top: 8px; overflow: visible; }
+.pt-spark-line { stroke-width: 1.6; }
+.pt-spark-line.spark-good { stroke: #1e8e3e; }
+.pt-spark-line.spark-bad { stroke: #d23f31; }
+
+.pulse-chart-panel {
+  border: 1px solid var(--rule); border-radius: 14px;
+  background: var(--box); padding: 12px 12px 4px; margin-bottom: 16px;
+}
+.pcp-head { display: flex; align-items: center; justify-content: space-between; }
+.pcp-title { font-size: 14px; font-weight: 700; }
+.pcp-close {
+  font-size: 15px; color: var(--ink-3); width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+}
+.pcp-close:active { background: var(--rule); }
+.pcp-ranges { display: flex; gap: 6px; margin: 8px 0 2px; }
+.pcp-range {
+  font-size: 11.5px; font-weight: 600; padding: 4px 12px;
+  border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-2); background: transparent;
+}
+.pcp-range.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+
+.pulse-markets { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.pmk-row {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--rule); border-radius: 12px; background: var(--box);
+  padding: 12px 14px; text-decoration: none; color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+}
+.pmk-row:active { background: var(--rule); }
+.pmk-name { font-size: 14px; font-weight: 700; flex: 0 0 auto; min-width: 92px; }
+.pmk-stats { display: flex; gap: 14px; flex: 1; flex-wrap: wrap; justify-content: flex-end; }
+.pmk-stat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+.pmk-k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--ink-3); }
+.pmk-v { font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pmk-v.good, .pmk-yoy.good { color: #1e8e3e; }
+.pmk-v.bad, .pmk-yoy.bad { color: #d23f31; }
+.pmk-yoy { font-size: 11px; font-weight: 600; }
+.pmk-arrow { color: var(--ink-3); font-size: 18px; flex: 0 0 auto; }
+
+/* Market page medians */
+.market-medians {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; margin-bottom: 16px;
+}
+.mm-tile {
+  border: 1px solid var(--rule); border-radius: 12px; background: var(--box); padding: 12px 13px;
+}
+.mm-k { font-size: 11px; color: var(--ink-2); font-weight: 600; }
+.mm-v { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.mm-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 1px; }
+
+@media (prefers-color-scheme: dark) {
+  .pt-chg.good, .pt-spark-line.spark-good, .pmk-v.good, .pmk-yoy.good { color: #5bd07f; }
+  .pt-chg.bad, .pt-spark-line.spark-bad, .pmk-v.bad, .pmk-yoy.bad { color: #ff7b6e; }
+  .pulse-verdict.easy { border-left-color: #5bd07f; }
+  .pulse-verdict.tight { border-left-color: #ff7b6e; }
+}
+
+/* ============================================================
+   Mapbox GL — popup + surface theming
+   ============================================================ */
+.mapboxgl-popup-content {
+  background: var(--box); color: var(--ink);
+  border-radius: 10px; padding: 12px 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.28);
+}
+.mapboxgl-popup-tip { border-top-color: var(--box) !important; border-bottom-color: var(--box) !important; }
+.mapboxgl-popup-close-button { font-size: 17px; color: var(--ink-3); padding: 0 6px; }
+.map-popup .pop-market {
+  display: inline-block; margin-top: 8px; font-size: 12px; font-weight: 600;
+  color: var(--accent); text-decoration: none;
+}
+.mapboxgl-ctrl-group { background: var(--box) !important; }
+.mapboxgl-ctrl-group button + button { border-top: 1px solid var(--rule) !important; }
+@media (prefers-color-scheme: dark) {
+  .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon { filter: invert(1); }
+  .mapboxgl-ctrl-attrib { background: rgba(16,18,20,0.7) !important; }
+  .mapboxgl-ctrl-attrib a { color: var(--ink-3) !important; }
+}
