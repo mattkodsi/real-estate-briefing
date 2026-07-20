@@ -4,8 +4,30 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
+const APP_VERSION = "v43";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
+
+/* What can THIS device actually do with a share? iOS "Add to Home Screen"
+   web apps have a standing WebKit limitation where files can't go through the
+   share sheet from standalone mode — canShare({files}) returns false — which is
+   why the one-tap share silently falls back to the card viewer. This readout
+   (shown on the Status page) tells us which case we're in on a real phone. */
+function shareCapabilities() {
+  let canFiles = false;
+  try {
+    const f = new File([new Uint8Array([0])], "probe.png", { type: "image/png" });
+    canFiles = !!(navigator.canShare && navigator.canShare({ files: [f] }));
+  } catch { canFiles = false; }
+  const standalone = window.matchMedia?.("(display-mode: standalone)").matches
+    || window.navigator.standalone === true;
+  return {
+    version: APP_VERSION,
+    standalone,
+    hasShare: typeof navigator.share === "function",
+    canShareFiles: canFiles,
+  };
+}
 
 async function sb(query) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, {
@@ -4468,6 +4490,23 @@ async function renderStatus() {
   const rAge = ageMin(ratesAt);
   statusRow(sysCard, "Rates cache", fmtAge(rAge), rAge > 120 ? "warn" : "ok");
   wrap.appendChild(sysCard);
+
+  // This device — confirms which app version is actually running (cache check)
+  // and whether iOS will let this install hand a file to Messages.
+  const devCard = statusCard("This device");
+  const cap = shareCapabilities();
+  statusRow(devCard, "App version", cap.version);
+  statusRow(devCard, "Installed app", cap.standalone ? "yes (home screen)" : "no (browser tab)");
+  statusRow(devCard, "Web Share", cap.hasShare ? "yes" : "no", cap.hasShare ? "ok" : "warn");
+  statusRow(devCard, "Share image directly", cap.canShareFiles ? "yes" : "no",
+    cap.canShareFiles ? "ok" : "warn");
+  if (!cap.canShareFiles) {
+    const note = document.createElement("p");
+    note.className = "status-note";
+    note.textContent = "This install can't push an image straight into the share sheet (an iOS limitation), so Share opens the card viewer instead.";
+    devCard.appendChild(note);
+  }
+  wrap.appendChild(devCard);
 }
 
 /* ---------- alerts: web push + following (Phase 4) ----------
