@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v86";
+const APP_VERSION = "v87";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -376,11 +376,11 @@ async function init() {
     const t = e.touches[0];
     ft = { card, x: t.clientX, y: t.clientY, dx: 0, horiz: false, moved: false, mode: null };
     ft.timer = setTimeout(() => {
-      // short hold: open the peek and hand this same finger into the sheet drag.
-      // Kept just above a normal tap (~120ms) so taps still open the reader, but
-      // low enough that the preview feels near-instant, not a deliberate wait.
+      // fire at the very edge of a normal tap: a real click lifts the finger
+      // before this (so it opens the reader, no peek), but any actual hold trips
+      // it near-instantly — the preview feels immediate, not a deliberate wait.
       if (ft && !ft.moved) { ft.mode = "peek"; openStoryPeek(card.dataset.date, card.dataset.id, card.getBoundingClientRect()); }
-    }, 200);
+    }, 120);
   }, { passive: true });
   feed.addEventListener("touchmove", (e) => {
     if (!ft) return;
@@ -4959,7 +4959,7 @@ function growFromCard(card, rect) {
   card.style.transform = "scale(0.46)";
   card.style.opacity = "0.15";
   requestAnimationFrame(() => {
-    card.style.transition = "transform .24s cubic-bezier(.2,.82,.24,1), opacity .15s ease";
+    card.style.transition = "transform .19s cubic-bezier(.2,.84,.26,1), opacity .12s ease";
     card.style.transform = "scale(1)";
     card.style.opacity = "1";
     setTimeout(() => {
