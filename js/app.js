@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v83";
+const APP_VERSION = "v84";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -4921,12 +4921,15 @@ function hideReader() {
    Tapping any linked name or term opens a bottom sheet — a glance, not a
    navigation. The full page is one tap away (header or the footer button). */
 
-function openSheet(build) {
+function openSheet(build, isPeek) {
   const sheet = $("sheet");
   const card = $("sheet-card");
   card.innerHTML = "";
   card.style.transition = "";   // clear any leftover drag inline styles so the
   card.style.transform = "";    // CSS .open rise/fall animates cleanly
+  // a story peek grows out of the card into a floating rounded card; the
+  // dossier sheets stay as bottom sheets. The .peek class swaps the CSS.
+  sheet.classList.toggle("peek", !!isPeek);
   build(card);
   sheet.hidden = false;
   document.body.classList.add("sheet-open"); // suppresses page-wide text selection
@@ -5034,7 +5037,7 @@ function openStoryPeek(date, id, fromY) {
       open.addEventListener("click", () => sheetOpenStory());
       card.appendChild(open);
     }
-  });
+  }, true); // isPeek: grow into a floating rounded card, not a bottom sheet
   // NB: we do NOT start the drag here — the feed handler lazy-starts it on the
   // first finger move (capturing the finger's position then), so the card never
   // snaps from mid-rise to the finger. `fromY` is unused now, kept for clarity.
