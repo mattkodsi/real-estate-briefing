@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v81";
+const APP_VERSION = "v82";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -193,6 +193,7 @@ const state = {
   fwdHorizon: "1Y",    // forward-view horizon: "30D" | "90D" | "6M" | "1Y" | "3Y" | "5Y"
   allDays: null,       // every day's data, loaded once for Search + Trends
   threads: null,       // story arcs (cross-day timelines)
+  campaigns: null,     // canopies: agenda-level groupings above threads
   events: null,        // dated catalysts (the calendar)
   metrics: null,       // cited industry figures (market metrics)
   pulse: null,         // Market Pulse: national + by-metro external data (FRED/Zillow)
@@ -562,6 +563,13 @@ async function init() {
   route();
   // self-heal push subscriptions left on a rotated VAPID key (best-effort, async)
   reconcilePushSub();
+  // warm the canopy registry so story cards can show their 🌳 chip; if we're on
+  // the briefing when it lands, repaint once so the chips appear without a reload
+  getCampaigns().then((cs) => {
+    if (!cs.length) return;
+    const h = location.hash;
+    if (h === "" || h === "#/" || h.startsWith("#/day/")) route();
+  });
 }
 
 async function getDay(date) {
@@ -597,6 +605,36 @@ async function getThreads() {
     state.threads = rows.map((r) => ({ slug: r.slug, ...(r.data || {}) }));
   } catch { state.threads = []; }
   return state.threads;
+}
+
+/* Canopies (agenda-level groupings above threads). Same fetch-once-and-cache
+   shape as the registries above; empty until the pipeline registers one. */
+async function getCampaigns() {
+  if (state.campaigns) return state.campaigns;
+  try {
+    const rows = await sb("campaigns?select=slug,data");
+    state.campaigns = rows.map((r) => ({ slug: r.slug, ...(r.data || {}) }));
+  } catch { state.campaigns = []; }
+  return state.campaigns;
+}
+
+/* Which canopy (if any) a thread belongs to — it's a branch on that trunk. */
+function canopyForThread(campaigns, threadSlug) {
+  if (!threadSlug) return null;
+  return campaigns.find((c) =>
+    (c.branches || []).some((b) => b.thread === threadSlug)) || null;
+}
+
+/* Which canopy (if any) a single story belongs to — either through its thread
+   (a multi-story branch) or as a loose leaf listed directly on a branch. */
+function canopyForStory(campaigns, story, date) {
+  if (!campaigns.length) return null;
+  if (story.thread) {
+    const viaThread = canopyForThread(campaigns, story.thread);
+    if (viaThread) return viaThread;
+  }
+  return campaigns.find((c) => (c.branches || []).some((b) =>
+    (b.stories || []).some((s) => s.id === story.id && s.date === date))) || null;
 }
 
 async function getEvents() {
@@ -671,6 +709,7 @@ async function refreshData(silent, manual) {
     state.terms = null;   // dictionary refetches next time the Dictionary view opens
     state.allDays = null; // Search/Trends corpus refetches on next open
     state.threads = null; // arcs/calendar/metrics refetch on next open
+    state.campaigns = null;
     state.events = null;
     state.metrics = null;
     state.pulse = null;   // Market Pulse re-reads the cache on next Desk/Market open
@@ -789,6 +828,9 @@ function route() {
   } else if (h === "#/alerts") {
     showView("alerts");
     renderAlerts();
+  } else if ((m = h.match(/^#\/campaign\/([\w-]+)$/))) {
+    showView("threads");
+    renderCampaign(m[1]);
   } else if ((m = h.match(/^#\/thread\/([\w-]+)$/))) {
     showView("threads");
     renderThread(m[1]);
@@ -1075,7 +1117,7 @@ function chip(text, cls) {
   return span;
 }
 
-function storyChips(story) {
+function storyChips(story, date) {
   const wrap = document.createElement("div");
   wrap.className = "chips";
   if (story.dealType) {
@@ -1100,6 +1142,20 @@ function storyChips(story) {
       location.hash = `/thread/${story.thread}`;
     });
     wrap.appendChild(arc);
+  }
+  // canopy chip: this story sits under an agenda-level grouping — tap to the
+  // trunk. Best-effort on state.campaigns (warmed at boot); appears once cached.
+  if (state.campaigns) {
+    const can = canopyForStory(state.campaigns, story, date);
+    if (can) {
+      const cc = chip("🌳 " + (can.title || "Canopy"), "chip-canopy");
+      cc.setAttribute("role", "link");
+      cc.addEventListener("click", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        location.hash = `/campaign/${can.slug}`;
+      });
+      wrap.appendChild(cc);
+    }
   }
   return wrap.children.length ? wrap : null;
 }
@@ -1135,7 +1191,7 @@ function storyRow(story, date, lead) {
     linkifyElement(p);
     el.appendChild(p);
   }
-  const chips = storyChips(story);
+  const chips = storyChips(story, date);
   if (chips) el.appendChild(chips);
   el.appendChild(storyMeta(story, expandable));
   return el;
@@ -2521,7 +2577,7 @@ function leagueRow({ p, count, volume }, rank) {
    and catalysts first, then the deal-level analytics that sharpen as coverage
    accumulates, then the macro backdrop. Each opens its own full board. */
 const DESK_CATALOG = [
-  { id: "threads", icon: "🧵", title: "Threads", blurb: "Running storylines the briefing is tracking — same property, deal, case or company event", hash: "#/threads", feature: true },
+  { id: "threads", icon: "🧵", title: "Threads & Canopies", blurb: "Running storylines — same property, deal, case or company event — and the agendas that group them", hash: "#/threads", feature: true },
   { id: "calendar", icon: "📅", title: "Calendar", blurb: "Upcoming catalysts — auctions, court dates, Fed decisions", hash: "#/calendar" },
   { id: "league", icon: "🏆", title: "League Tables", blurb: "Most-active buyers, lenders, developers and brokers" },
   { id: "comps", icon: "🏙️", title: "Comps", blurb: "$/sf and $/unit medians, delineated by market and asset class" },
@@ -2540,8 +2596,8 @@ async function renderTrends() {
 
   // the landing needs six independent tables — fetch them in parallel (one round
   // trip, not six) so the Desk paints fast on first open
-  const [days, metrics, players, events, threads, pulse] = await Promise.all([
-    getAllDays(), getMetrics(), getPlayers(), getEvents(), getThreads(), getPulse(),
+  const [days, metrics, players, events, threads, campaigns, pulse] = await Promise.all([
+    getAllDays(), getMetrics(), getPlayers(), getEvents(), getThreads(), getCampaigns(), getPulse(),
   ]);
   const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })));
   const priced = stories.filter((s) => s.valueUsd);
@@ -2556,7 +2612,13 @@ async function renderTrends() {
     coverage: `${stories.length} stories`,
     ledger: `${priced.length} priced deals`,
     calendar: `${events.filter((e) => (e.date || "") >= todayISO() && !e.resolvedBy).length} upcoming`,
-    threads: `${threads.filter((t) => t.status !== "resolved").length} active`,
+    threads: (() => {
+      const active = threads.filter((t) => t.status !== "resolved").length;
+      const canopies = campaigns.filter((c) => c.status !== "resolved").length;
+      return canopies
+        ? `${canopies} ${canopies === 1 ? "canopy" : "canopies"} · ${active} active`
+        : `${active} active`;
+    })(),
   };
 
   const grid = document.createElement("div");
@@ -4669,6 +4731,19 @@ async function openReaderRoute(date, id) {
     });
   }
 
+  // canopy banner: if the story sits under an agenda-level grouping, offer the
+  // trunk — shown above the thread banner (the wider arc reads first)
+  const canopyEl = $("reader-canopy");
+  canopyEl.hidden = true;
+  getCampaigns().then((campaigns) => {
+    const c = canopyForStory(campaigns, story, date);
+    if (!c || !state.reader || state.reader.story.id !== story.id) return; // reader moved on
+    const nb = (c.branches || []).length;
+    canopyEl.textContent = `🌳 Part of an agenda — ${c.title} · ${nb} ${nb === 1 ? "front" : "fronts"} →`;
+    canopyEl.href = `#/campaign/${c.slug}`;
+    canopyEl.hidden = false;
+  });
+
   // swipe/keyboard navigation context + progress + the next-up card
   state.readerNav = buildReaderNav(day, story);
   state.readerDay = day;
@@ -4950,7 +5025,7 @@ function openStoryPeek(date, id, fromY) {
     p.className = "peek-summary";
     p.textContent = decodeEntities(story.summary || "");
     card.append(k, h, p);
-    const chips = storyChips(story);
+    const chips = storyChips(story, date);
     if (chips) { chips.classList.add("peek-chips"); card.appendChild(chips); }
     if (isExpandable(story)) {
       const open = document.createElement("button");
@@ -6293,21 +6368,77 @@ async function renderThreads() {
   wrap.innerHTML = "";
   wrap.appendChild(pageHead("Threads",
     "Running storylines the briefing is tracking. Each links stories by a concrete shared spine — the same property, deal, lawsuit, or company event — never a vague theme."));
-  const threads = await getThreads();
-  if (!threads.length) {
+  const [threads, campaigns] = await Promise.all([getThreads(), getCampaigns()]);
+  if (!threads.length && !campaigns.length) {
     wrap.appendChild(emptyPanel("No threads yet",
       "When two or more stories share a concrete anchor — the same building, deal, case, or company event — they connect into a timeline here."));
     return;
   }
-  const sorted = [...threads].sort((a, b) => {
+
+  const byRecency = (a, b) => {
     const ar = a.status === "resolved" ? 1 : 0, br = b.status === "resolved" ? 1 : 0;
     if (ar !== br) return ar - br;                 // active before resolved
     return (b.lastSeen || "").localeCompare(a.lastSeen || "");
-  });
-  const list = document.createElement("div");
-  list.className = "thread-list";
-  for (const t of sorted) list.appendChild(threadCard(t));
-  wrap.appendChild(list);
+  };
+
+  const threadMap = new Map(threads.map((t) => [t.slug, t]));
+
+  // Canopies rank above threads — the widest arcs first (agenda-level groupings)
+  if (campaigns.length) {
+    const sub = document.createElement("p");
+    sub.className = "thread-group-head";
+    sub.textContent = "🌳 Canopies — several threads under one agenda";
+    wrap.appendChild(sub);
+    const clist = document.createElement("div");
+    clist.className = "thread-list";
+    for (const c of [...campaigns].sort(byRecency)) clist.appendChild(canopyCard(c, threadMap));
+    wrap.appendChild(clist);
+  }
+
+  // Individual threads that aren't already a branch of a canopy (those are
+  // reached through their trunk, so listing them again here would double up)
+  const branchSlugs = new Set(
+    campaigns.flatMap((c) => (c.branches || []).map((b) => b.thread).filter(Boolean)));
+  const loose = threads.filter((t) => !branchSlugs.has(t.slug)).sort(byRecency);
+  if (loose.length) {
+    if (campaigns.length) {
+      const sub = document.createElement("p");
+      sub.className = "thread-group-head";
+      sub.textContent = "🧵 Threads";
+      wrap.appendChild(sub);
+    }
+    const list = document.createElement("div");
+    list.className = "thread-list";
+    for (const t of loose) list.appendChild(threadCard(t));
+    wrap.appendChild(list);
+  }
+}
+
+/* A canopy summary card for the Threads index — reads like a thread card but
+   counts its fronts (branches) and total stories, and wears the 🌳 mark. */
+function canopyCard(c, threadMap) {
+  const btn = document.createElement("button");
+  btn.className = "thread-card canopy-card";
+  btn.addEventListener("click", () => { location.hash = `/campaign/${c.slug}`; });
+  const top = document.createElement("div");
+  top.className = "thread-card-top";
+  const h = document.createElement("h3");
+  h.textContent = "🌳 " + (c.title || c.slug);
+  const st = document.createElement("span");
+  st.className = "thread-status " + (c.status === "resolved" ? "resolved" : "active");
+  st.textContent = c.status === "resolved" ? "Resolved" : "Active";
+  top.append(h, st);
+  const anchor = document.createElement("p");
+  anchor.className = "thread-anchor";
+  anchor.textContent = c.driver ? `Driven by ${c.driver}` : (c.mandate || "");
+  const meta = document.createElement("p");
+  meta.className = "thread-meta";
+  const nb = (c.branches || []).length;
+  const ns = campaignStoryCount(c, threadMap);
+  meta.textContent = `${nb} ${nb === 1 ? "front" : "fronts"} · ${ns} ${ns === 1 ? "story" : "stories"}` +
+    (c.lastSeen ? " · updated " + formatDate(c.lastSeen, { month: "short", day: "numeric" }) : "");
+  btn.append(top, anchor, meta);
+  return btn;
 }
 
 function threadCard(t) {
@@ -6393,6 +6524,166 @@ async function renderThread(slug) {
     tl.appendChild(row);
   }
   wrap.appendChild(tl);
+}
+
+/* --- Canopies (agenda-level groupings above threads) --- */
+
+/* Total stories under a canopy: a thread-backed branch counts its thread's
+   entries; a loose-leaf branch counts the stories listed directly on it. */
+function campaignStoryCount(c, threadMap) {
+  let n = 0;
+  for (const b of c.branches || []) {
+    if (b.thread && threadMap && threadMap.get(b.thread)) {
+      n += (threadMap.get(b.thread).entries || []).length;
+    } else {
+      n += (b.stories || []).length;
+    }
+  }
+  return n;
+}
+
+/* One branch's installments, oldest→newest, whether it's a registered thread
+   (pull the thread's live entries) or a set of loose leaves listed on the
+   branch. Returns [{date, id, title, delta?}] sorted for a timeline. */
+function branchEntries(b, threadMap) {
+  const raw = (b.thread && threadMap.get(b.thread))
+    ? (threadMap.get(b.thread).entries || [])
+    : (b.stories || []);
+  return [...raw].sort((x, y) => (x.date || "").localeCompare(y.date || ""));
+}
+
+async function renderCampaign(slug) {
+  const wrap = $("threads-content");
+  wrap.innerHTML = "";
+  wrap.appendChild(backLink("All threads", "#/threads"));
+  const [campaigns, threads] = await Promise.all([getCampaigns(), getThreads()]);
+  const c = campaigns.find((x) => x.slug === slug);
+  if (!c) { wrap.appendChild(emptyPanel("Canopy not found", "This agenda isn't on record.")); return; }
+  const threadMap = new Map(threads.map((t) => [t.slug, t]));
+
+  // Head — the 🌳 mark, title, status
+  const head = document.createElement("div");
+  head.className = "thread-head";
+  const h = document.createElement("h2");
+  h.textContent = "🌳 " + (c.title || slug);
+  const st = document.createElement("span");
+  st.className = "thread-status " + (c.status === "resolved" ? "resolved" : "active");
+  st.textContent = c.status === "resolved" ? "Resolved" : "Active";
+  head.append(h, st);
+  wrap.appendChild(head);
+
+  // Driver line — the named actor + bounded mandate that lets this canopy exist
+  if (c.driver || c.mandate) {
+    const d = document.createElement("p");
+    d.className = "canopy-driver";
+    if (c.driver) {
+      d.appendChild(document.createTextNode("Driven by "));
+      const b = document.createElement("b");
+      b.textContent = c.driver;
+      d.appendChild(b);
+    }
+    if (c.driver && c.mandate) d.appendChild(document.createTextNode(" · "));
+    if (c.mandate) d.appendChild(document.createTextNode(c.mandate));
+    wrap.appendChild(d);
+  }
+
+  // Stat row — fronts / stories / opened / status
+  const nb = (c.branches || []).length;
+  const ns = campaignStoryCount(c, threadMap);
+  const stats = document.createElement("div");
+  stats.className = "canopy-stats";
+  const statCell = (v, l) => `<div class="cs"><div class="cs-v">${v}</div><div class="cs-l">${l}</div></div>`;
+  stats.innerHTML =
+    statCell(nb, nb === 1 ? "Front" : "Fronts") +
+    statCell(ns, ns === 1 ? "Story" : "Stories") +
+    statCell(c.createdAt ? formatDate(c.createdAt, { month: "short", day: "numeric" }) : "—", "Opened") +
+    statCell(c.status === "resolved" ? "Resolved" : "Active", "Status");
+  wrap.appendChild(stats);
+
+  // The through-line — the meaning layer: why these fronts are one story
+  if (c.throughLine) {
+    const tl = document.createElement("p");
+    tl.className = "canopy-throughline";
+    const tag = document.createElement("span");
+    tag.className = "ct-tag";
+    tag.textContent = "The through-line · ";
+    tl.appendChild(tag);
+    tl.appendChild(document.createTextNode(decodeEntities(c.throughLine)));
+    wrap.appendChild(tl);
+  }
+
+  // Branches — each a mini-timeline under its own header
+  for (const b of c.branches || []) {
+    const entries = branchEntries(b, threadMap);
+    const sec = document.createElement("div");
+    sec.className = "branch-sec";
+
+    const bh = document.createElement("div");
+    bh.className = "branch-head";
+    const node = document.createElement("span");
+    node.className = "branch-node";
+    const bt = document.createElement("span");
+    bt.className = "branch-title";
+    bt.textContent = b.title || (b.thread ? (threadMap.get(b.thread)?.title || b.thread) : "");
+    const bmeta = document.createElement("span");
+    bmeta.className = "branch-count";
+    bmeta.textContent = `${entries.length}`;
+    bh.append(node, bt, bmeta);
+    // a branch backed by a full thread links out to that thread's own page
+    if (b.thread && threadMap.has(b.thread)) {
+      const link = document.createElement("a");
+      link.className = "branch-threadlink";
+      link.href = `#/thread/${b.thread}`;
+      link.textContent = "thread ›";
+      link.addEventListener("click", (e) => e.stopPropagation());
+      bh.appendChild(link);
+    }
+    sec.appendChild(bh);
+
+    if (b.why) {
+      const w = document.createElement("p");
+      w.className = "branch-why";
+      w.textContent = b.why;
+      sec.appendChild(w);
+    }
+
+    const list = document.createElement("div");
+    list.className = "branch-leaves";
+    for (const e of entries) {
+      const row = document.createElement("button");
+      row.className = "leaf-row";
+      row.addEventListener("click", () => { location.hash = `/story/${e.date}/${e.id}`; });
+      const dt = document.createElement("div");
+      dt.className = "leaf-date";
+      dt.textContent = formatDate(e.date, { month: "short", day: "numeric" });
+      const ti = document.createElement("div");
+      ti.className = "leaf-title";
+      ti.textContent = e.title;
+      row.append(dt, ti);
+      if (e.delta) {
+        const dl = document.createElement("div");
+        dl.className = "leaf-delta";
+        dl.textContent = e.delta;
+        row.appendChild(dl);
+      }
+      list.appendChild(row);
+    }
+    sec.appendChild(list);
+    wrap.appendChild(sec);
+  }
+
+  // Related threads — visible but honestly labeled as NOT branches of the trunk
+  const related = (c.relatedThreads || []).map((s) => threadMap.get(s)).filter(Boolean);
+  if (related.length) {
+    const rh = document.createElement("p");
+    rh.className = "thread-group-head";
+    rh.textContent = "Related threads — adjacent, not part of the agenda";
+    wrap.appendChild(rh);
+    const rlist = document.createElement("div");
+    rlist.className = "thread-list";
+    for (const t of related) rlist.appendChild(threadCard(t));
+    wrap.appendChild(rlist);
+  }
 }
 
 /* --- Calendar (dated catalysts) --- */

@@ -92,6 +92,14 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
     - Create a thread only at the SECOND qualifying story (a thread of one is not a thread). When a thread is created or extended, set each linked story's `thread` field to the thread slug — including patching the earlier days' stories (refetch those days, set the field, re-push).
     - `status`: `active` until the arc concretely concludes (deal closed, case settled/dismissed, resolution reported) → `resolved`. Nothing else; the app derives dormancy from `lastSeen`.
     - Threads are permanent — never delete a thread or an entry; one slug per arc, forever (same no-DELETE guarantee as `players`).
+10b-ii. **Canopies**: maintain the campaign registry — the layer *above* threads that groups several distinct threads (and loose stories) into ONE agenda the app renders as a trunk → branches → leaves tree (`#/campaign/SLUG`). Fetch current canopies (`GET <SUPABASE_URL>/rest/v1/campaigns?select=slug,data`), merge today's stories, write `data/campaigns.json` (schema below). This is where sibling initiatives that share no single thread-anchor but ARE one program belong (e.g. Mamdani's rent-freeze, pied-à-terre tax, and land-trust RFP are not one thread, but they are one housing agenda). **The gate — a canopy needs a bounded actor-driven program, never a theme. All three must pass:**
+    1. **Named driver** — you can name the actor/coalition pushing it (a mayor, a regulator, a stated coalition, a firm executing a *stated* strategy). No nameable driver → it's a theme (banned). "Office distress" fails; "Mamdani's housing platform" passes.
+    2. **Bounded mandate** — the program has articulated planks, not an open-ended market condition or sector. "Interest rates" / "the market" have no mandate → banned.
+    3. **Coverage would say it** — a reporter would naturally write "another plank of X's agenda." If the strongest sentence you can write is "both are about NYC housing," it's a theme → reject.
+    - **Banned exactly as threads are:** thematic similarity, same sector, same market, or the same player merely appearing in unrelated deals (five random Blackstone deals ≠ a canopy; Blackstone's *announced* $100B data-center platform with named acquisitions toward it = a canopy).
+    - **Structure:** a canopy has `branches` (each either a registered `thread` slug, OR a set of loose `stories` that don't form a valid thread on their own) and optional `relatedThreads` (adjacent arcs shown but honestly labeled as NOT part of the agenda). Each branch carries a one-phrase `why` (the anchor that admits it to the trunk). A branch may hold a single story — the trunk supplies the context a lone thread would lack.
+    - **`throughLine`** is the meaning layer: 2–4 sentences on why these fronts are one story, in the voice of the daily overview. This is the canopy's reason to exist — if you can't write it, there's no canopy.
+    - Create a canopy at the SECOND qualifying branch (a trunk with one branch is just a thread). Canopies point *down* at stories/threads that already exist — you never write a `campaign` field onto stories or threads; membership lives only in the canopy's `branches`, so a canopy can be added or reworked without touching a single story. `status`: `active` until the whole agenda concludes → `resolved`. Permanent, append-only, one slug per agenda forever (same no-DELETE guarantee as `players`).
 10c. **Calendar events**: maintain the events registry — **automatically compile EVERY concrete dated future event** mentioned in today's stories, no curation: auctions, court dates/trials, policy votes/deadlines/effective dates, Fed meetings, scheduled data releases, loan maturities with stated dates, scheduled groundbreakings/openings/closings. Fetch current events (`GET <SUPABASE_URL>/rest/v1/events?select=id,data`), merge, write `data/events.json` (schema below). Rules:
     - Only real dated events: a specific day, or an unambiguous month (store the 1st with `"approx": "month"`). Vague timing ("later this year", "expected soon") never enters.
     - `id` = `YYYY-MM-DD-short-kebab-title`. Check whether the same event already exists under a slightly different title before creating; a repeat mention appends to `announcedBy` instead of duplicating.
@@ -102,8 +110,8 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
     - Skip single-deal numbers (that's `valueUsd`) and one-off anecdotes; this ledger is for recurring market-level series only.
     - One entry per metric slug, forever; append to `series` (skip exact duplicates of the same print). `asOf` = the period the figure describes when stated, else the story date. Scope geography/asset in the slug (`office-vacancy-manhattan`, `rent-growth-national`) — reuse existing slugs before inventing near-duplicates.
 11. Validate all written files with `python3 -m json.tool`.
-11b. **Collector checklist — do NOT skip (this is the step most often missed).** Steps 10b–10d are mandatory every run, not optional flourishes. Before publishing, confirm you actually built them this run: **threads** (`data/threads.json` — did any story concretely link to another, same property/case/company-event? if yes it MUST be registered and the linked stories' `thread` fields set), **events** (`data/events.json` — EVERY dated future catalyst mentioned today; a run that produced any `watch` item almost always has events to register), and **metrics** (`data/metrics.json` — every cited figure with a source: CMBS delinquency/Trepp, rents/Yardi, vacancy/CBRE, price indices, etc.). These are append-only registries, so fetch the current rows from Supabase first (`GET .../threads|events|metrics?select=...`) and merge — never overwrite. If a genuinely quiet run has none of a given kind, that's fine — but the default expectation on a normal news day is several events and metrics. (History note: these three registries sat empty for the app's first week because this step was skipped; a one-time backfill mined them from the archive. Don't let them fall behind again.)
-12. **Publish**: `python3 scripts/push_data.py` — upserts every local day and week file plus `data/players.json`, `data/terms.json`, and (when present) `data/threads.json` / `data/events.json` / `data/metrics.json` to Supabase. The hosted app updates within seconds (no deploy involved).
+11b. **Collector checklist — do NOT skip (this is the step most often missed).** Steps 10b–10d are mandatory every run, not optional flourishes. Before publishing, confirm you actually built them this run: **threads** (`data/threads.json` — did any story concretely link to another, same property/case/company-event? if yes it MUST be registered and the linked stories' `thread` fields set), **events** (`data/events.json` — EVERY dated future catalyst mentioned today; a run that produced any `watch` item almost always has events to register), and **metrics** (`data/metrics.json` — every cited figure with a source: CMBS delinquency/Trepp, rents/Yardi, vacancy/CBRE, price indices, etc.). Also check **canopies** (step 10b-ii, `data/campaigns.json`) — if today added a sibling initiative to a running agenda (or a second front opened one), the canopy must be created/extended. These are append-only registries, so fetch the current rows from Supabase first (`GET .../threads|campaigns|events|metrics?select=...`) and merge — never overwrite. If a genuinely quiet run has none of a given kind, that's fine — but the default expectation on a normal news day is several events and metrics. (History note: these three registries sat empty for the app's first week because this step was skipped; a one-time backfill mined them from the archive. Don't let them fall behind again.)
+12. **Publish**: `python3 scripts/push_data.py` — upserts every local day and week file plus `data/players.json`, `data/terms.json`, and (when present) `data/threads.json` / `data/campaigns.json` / `data/events.json` / `data/metrics.json` to Supabase. The hosted app updates within seconds (no deploy involved).
 13. **Rates**: **Rates are maintained server-side and need no action from the routine.** A Supabase `pg_cron` job (`rates-heartbeat`, every 30 min) calls the `rates-live` edge function, which fetches the Treasury curve + SOFR from *Supabase's* network (clean egress) and refreshes `rates_cache` — what the app's Rates page and masthead actually read. This is fully independent of the routine's own egress. You MAY run `python3 scripts/fetch_rates.py` as a redundant belt-and-suspenders, but **a failure is expected and non-fatal in sandboxes that block all outbound HTTP (including *.supabase.co) — do NOT record it in the day's `notes`.** The site's rates stay fresh regardless. (Only worth flagging if the app itself shows stale rates, which would mean the edge function or heartbeat is down — a separate infra issue, not a routine failure.)
 
 ## Web push (server-side — no action from the routine)
@@ -257,6 +265,34 @@ The whole registry in one file; `push_data.py` upserts each entry as its own `th
 ```
 
 Entries newest-first (same convention as player mentions); the app reverses for timeline display.
+
+## Data schema — `data/campaigns.json`
+
+The whole registry in one file; `push_data.py` upserts each entry as its own `campaigns` row. See step 10b-ii for the gate (named driver + bounded mandate + coverage-would-say-it — nothing else). A canopy points DOWN at existing threads/stories; never write a `campaign` field onto them.
+
+```json
+{
+  "generatedAt": "ISO-8601 UTC",
+  "campaigns": {
+    "mamdani-housing-agenda": {
+      "title": "short agenda name ('Mamdani's Housing Agenda')",
+      "type": "agenda | program | campaign",
+      "driver": "the named actor/coalition pushing it ('the Mamdani administration')",
+      "mandate": "the bounded program ('NYC housing platform')",
+      "throughLine": "2–4 sentences: why these fronts are one story, in the daily-overview voice — the canopy's reason to exist",
+      "status": "active | resolved",
+      "branches": [
+        { "title": "front name ('Rental Ripoff enforcement')", "thread": "thread slug when this front IS a registered thread (pulls its live entries); omit for a loose-leaf front", "why": "one-phrase anchor admitting this front to the trunk", "stories": [ { "date": "YYYY-MM-DD", "id": "story id", "title": "headline", "delta": "≤12 words: what this installment added (optional)" } ] }
+      ],
+      "relatedThreads": ["thread slug — adjacent arc shown but labeled NOT part of the agenda"],
+      "createdAt": "YYYY-MM-DD",
+      "lastSeen": "YYYY-MM-DD"
+    }
+  }
+}
+```
+
+A branch is EITHER thread-backed (`thread` set, `stories` omitted — the app pulls the thread's entries) OR loose (`stories` listed, `thread` omitted). Loose `stories` are ordered any way; the app sorts each branch oldest→newest for its timeline.
 
 ## Data schema — `data/events.json`
 

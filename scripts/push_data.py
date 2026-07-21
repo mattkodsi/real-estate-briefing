@@ -94,6 +94,7 @@ def main() -> None:
         push_terms(terms)  # the dictionary rides along on every publish
     registries = [
         (DATA / "threads.json", "threads", "threads", "slug"),
+        (DATA / "campaigns.json", "campaigns", "campaigns", "slug"),
         (DATA / "events.json", "events", "events", "id"),
         (DATA / "metrics.json", "metrics", "metrics", "id"),
     ]
@@ -101,7 +102,7 @@ def main() -> None:
         if path.exists():
             push_keyed(path, table, doc_key, pk)
     if not days and not weeks and not players.exists() and not terms.exists() \
-            and not any(p.exists() for p, *_ in registries):
+            and not only and not any(p.exists() for p, *_ in registries):
         print("nothing to push")
 
 
