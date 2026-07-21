@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v78";
+const APP_VERSION = "v79";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -267,7 +267,7 @@ async function init() {
   let resizeTimer;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => { if (!$("view-rates").hidden) renderRates(); }, 200);
+    resizeTimer = setTimeout(() => { if (ratesHost && ratesHost.isConnected) renderRates(); }, 200);
   });
   $("reader-back").addEventListener("click", () => closeReaderNav());
   // entity/term links live inside clickable cards; capture phase wins over the
@@ -753,8 +753,11 @@ function route() {
     showView("history");
     renderHistory();
   } else if (h === "#/rates") {
-    showView("rates");
-    renderRates();
+    // the Rates tool now lives inside Market Pulse — send the masthead ticker and
+    // any old bookmarks straight to its Rates & Credit tab
+    state.pulseGroup = "rates";
+    location.replace("#/desk/pulse");
+    return;
   } else if (h === "#/status") {
     showView("status");
     renderStatus();
@@ -2500,7 +2503,7 @@ const DESK_CATALOG = [
   { id: "caprates", icon: "🎯", title: "Cap Rates", blurb: "What each market is pricing, straight from deal coverage" },
   { id: "distress", icon: "⚠️", title: "Distress Watch", blurb: "Defaults, foreclosures and forced sales as they surface" },
   { id: "ledger", icon: "💵", title: "Deal Ledger", blurb: "Every priced deal, filterable and sortable" },
-  { id: "pulse", icon: "📈", title: "Market Pulse", blurb: "The market backdrop — public-API series plus the CRE figures the trade press cites, all in one place" },
+  { id: "pulse", icon: "📈", title: "Market Pulse", blurb: "The market backdrop — the full rate curve, home prices, rents, credit, all in one place" },
   { id: "coverage", icon: "🔥", title: "Coverage Pulse", blurb: "What the desks are covering this week versus last" },
 ];
 
@@ -2560,7 +2563,7 @@ async function renderDeskSection(id) {
 
   if (id === "pulse") {
     wrap.appendChild(pageHead("Market Pulse",
-      "One read on the whole market: public-API series (Fed rates & credit, Case-Shiller prices, Zillow rents by metro) plus the CRE figures the trade press cites (Trepp delinquency, CBRE vacancy, cap-rate surveys) — the numbers the paid data shops sell — each tagged by source. Tap any signal for its full history."));
+      "One read on the whole market. Rates & Credit opens with the full interest-rate tool — Treasury curve, SOFR forwards, rate history — then the public-API series (Case-Shiller prices, Zillow rents by metro) and the CRE figures the trade press cites (Trepp delinquency, CBRE vacancy, cap-rate surveys), each tagged by source. Tap any signal for its full history."));
     const [pulse, metrics] = await Promise.all([getPulse(), getMetrics()]);
     buildMarketPulse(wrap, pulse, metrics);
     return;
@@ -2676,13 +2679,26 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
   const groupBox = document.createElement("div");
   wrap.appendChild(groupBox);
   const order = pulse.order || Object.keys(n);
-  function paintGroup() {
+    // Treasury tiles the curve already plots — skipped in the rates tab so nothing
+    // shows twice (the interest-rate tool below owns the whole curve)
+    const skipInRates = new Set(["ust2y", "ust10y", "spread"]);
+    function paintGroup() {
     groupBox.innerHTML = "";
+    // Rates & Credit leads with the full interest-rate tool (Treasury curve /
+    // SOFR forward / rate history, all scrubbable) — folded in from what used to
+    // be a separate Rates page, so every rate now lives in one place.
+    if (state.pulseGroup === "rates") {
+      const tool = document.createElement("div");
+      tool.className = "pulse-rates-tool";
+      groupBox.appendChild(tool);
+      renderRates(tool);
+    }
     const grid = document.createElement("div");
     grid.className = "pulse-grid";
     for (const key of order) {
       const s = n[key];
       if (!s || s.group !== state.pulseGroup) continue;
+      if (state.pulseGroup === "rates" && skipInRates.has(key)) continue;
       grid.appendChild(pulseTile(s));
     }
     // fold Zillow national rent/value into the housing group
@@ -2690,14 +2706,10 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
       if (pulse.zillowNational.rent) grid.appendChild(pulseZillowTile("National Rent (Zillow)", "rent", pulse.zillowNational.rent));
       if (pulse.zillowNational.value) grid.appendChild(pulseZillowTile("Home Value (Zillow)", "value", pulse.zillowNational.value));
     }
-    groupBox.appendChild(grid);
-    // the Rates page is the deep tool for the curve; link to it from the rates group
-    if (state.pulseGroup === "rates") {
-      const see = document.createElement("a");
-      see.className = "pulse-seelink";
-      see.href = "#/rates";
-      see.innerHTML = "See the full Treasury curve, forwards &amp; SOFR &rarr;";
-      groupBox.appendChild(see);
+    if (grid.children.length) {
+      // in the rates tab these are the rates the curve doesn't carry (mortgage, policy)
+      if (state.pulseGroup === "rates") groupBox.appendChild(subHead("Mortgage & policy", "Rates beyond the Treasury curve"));
+      groupBox.appendChild(grid);
     }
     // CRE figures the trade press cites (Trepp delinquency, CBRE vacancy, cap-rate
     // surveys) — the numbers public APIs don't carry. Shown right under the matching
@@ -3792,7 +3804,7 @@ async function loadRates() {
     if (state.rates?.generatedAt && d.generatedAt <= state.rates.generatedAt) return false;
     state.rates = d;
     renderRateStrip();
-    if (!$("view-rates").hidden) renderRates();
+    if (ratesHost && ratesHost.isConnected) renderRates();
     return true;
   };
 
@@ -3814,7 +3826,7 @@ async function loadRates() {
       const rows = await sb("rates?select=data&order=date.desc&limit=1");
       state.rates = rows[0]?.data ?? null;
       renderRateStrip();
-      if (!$("view-rates").hidden) renderRates();
+      if (ratesHost && ratesHost.isConnected) renderRates();
     } catch { /* leave hidden */ }
   }
 }
@@ -3889,8 +3901,13 @@ function rateTile(label, value, sub, prior, key) {
   return div;
 }
 
-function renderRates() {
-  const wrap = $("rates-content");
+// The rates tool renders into whatever container it's given (it now lives inside
+// Market Pulse's Rates & Credit tab). ratesHost remembers that container so the
+// tool's own controls (curve/forward/history toggles) re-render in place.
+let ratesHost = null;
+function renderRates(host) {
+  if (host) ratesHost = host;
+  const wrap = ratesHost || $("rates-content");
   wrap.innerHTML = "";
   const r = state.rates;
   if (!r?.treasury) {

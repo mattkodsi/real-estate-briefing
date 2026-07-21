@@ -2768,6 +2768,12 @@ button.cal-open:active { background: var(--rule); }
   background: var(--box); padding: 12px 12px 4px; margin-bottom: 16px;
   scroll-margin-top: 14px; /* small gap when a tap scrolls this chart into view */
 }
+
+/* the full interest-rate tool, folded into Market Pulse's Rates & Credit tab.
+   It keeps all its own styling — this only spaces it within the tab and gives the
+   first heading a little breathing room from the tab bar above. */
+.pulse-rates-tool { margin-bottom: 4px; }
+.pulse-rates-tool > .section-head:first-child { margin-top: 4px; }
 .pcp-head { display: flex; align-items: center; justify-content: space-between; }
 .pcp-title { font-size: 14px; font-weight: 700; }
 .pcp-close {
