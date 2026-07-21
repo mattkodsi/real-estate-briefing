@@ -432,7 +432,7 @@ main {
   padding-top: 2px;
 }
 
-.watch-items { min-width: 0; }
+.watch-items { min-width: 0; flex: 1 1 auto; }
 
 .watch-item {
   font-size: 12.5px;
@@ -2608,8 +2608,9 @@ button.cal-open:active { background: var(--rule); }
 .cal-none { font-size: 13px; color: var(--ink-3); font-style: italic; text-align: center; padding: 20px 0; }
 
 .watch-cal {
-  display: inline-block;
-  margin-top: 8px;
+  flex: 0 0 auto;          /* never get squeezed into a narrow, wrapping column */
+  align-self: flex-start;
+  white-space: nowrap;
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;

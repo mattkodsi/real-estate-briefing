@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v79";
+const APP_VERSION = "v80";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -86,6 +86,17 @@ function isJunkImageUrl(src) {
   return /(?:^|\/|=)(?:placeholder|blank|spacer|transparent|default-image|missing|no-image|1x1)\b/.test(s)
     || /placeholder\.(?:png|jpe?g|gif|webp)/.test(s)
     || /assets\/website\/placeholder/.test(s);
+}
+
+/* Decode HTML entities in routine-written prose (summaries, explainers) — the
+   pipeline occasionally emits &mdash; / &amp; / &rsquo; as literal text, which
+   shows raw when set via textContent. A detached textarea decodes any entity
+   safely (its contents are never executed). */
+function decodeEntities(s) {
+  if (!s || s.indexOf("&") < 0) return s;
+  const t = document.createElement("textarea");
+  t.innerHTML = s;
+  return t.value;
 }
 
 /* Sanitize stored article HTML at render time: drop any <script>, and strip
@@ -846,7 +857,7 @@ async function renderBriefing(date) {
   const kps = day.keyPoints || [];
   $("lede-block").hidden = !hasOverview && !kps.length;
   $("overview-col").hidden = !hasOverview;
-  $("lede").textContent = day.overview || "";
+  $("lede").textContent = decodeEntities(day.overview || "");
   linkifyElement($("lede"));
 
   $("kp-col").hidden = !kps.length;
@@ -857,7 +868,7 @@ async function renderBriefing(date) {
     const text = typeof point === "string" ? point : (point.text || "");
     const id = typeof point === "string" ? null : point.id;
     const li = document.createElement("li");
-    li.textContent = text;
+    li.textContent = decodeEntities(text);
     if (id && (day.stories || []).some((s) => s.id === id)) {
       li.classList.add("kp-clickable");
       li.addEventListener("click", () => { location.hash = `/story/${date}/${id}`; });
@@ -1106,7 +1117,7 @@ function storyRow(story, date, lead) {
 
   if (story.summary) {
     const p = document.createElement("p");
-    p.textContent = story.summary;
+    p.textContent = decodeEntities(story.summary);
     linkifyElement(p);
     el.appendChild(p);
   }
@@ -1864,7 +1875,7 @@ async function renderHistory() {
 
     if (day?.overview) {
       const p = document.createElement("p");
-      p.textContent = day.overview;
+      p.textContent = decodeEntities(day.overview);
       linkifyElement(p);
       card.appendChild(p);
     }
@@ -4606,7 +4617,7 @@ async function openReaderRoute(date, id) {
     expl.appendChild(label);
     for (const para of story.explainer.split(/\n+/).filter(Boolean)) {
       const p = document.createElement("p");
-      p.textContent = para;
+      p.textContent = decodeEntities(para);  // routine sometimes writes &mdash; etc.
       expl.appendChild(p);
     }
     linkifyElement(expl);
@@ -4638,7 +4649,7 @@ async function openReaderRoute(date, id) {
       const t = threads.find((x) => x.slug === story.thread);
       if (!t || !state.reader || state.reader.story.id !== story.id) return; // reader moved on
       const n = (t.entries || []).length;
-      threadEl.textContent = `🧵 Part of an arc — ${t.title} · ${n} ${n === 1 ? "story" : "stories"} →`;
+      threadEl.textContent = `🧵 Part of a thread — ${t.title} · ${n} ${n === 1 ? "story" : "stories"} →`;
       threadEl.href = `#/thread/${t.slug}`;
       threadEl.hidden = false;
     });
@@ -4923,7 +4934,7 @@ function openStoryPeek(date, id, fromY) {
     h.textContent = story.title;
     const p = document.createElement("p");
     p.className = "peek-summary";
-    p.textContent = story.summary || "";
+    p.textContent = decodeEntities(story.summary || "");
     card.append(k, h, p);
     const chips = storyChips(story);
     if (chips) { chips.classList.add("peek-chips"); card.appendChild(chips); }
@@ -5938,7 +5949,7 @@ function shareStoryCard(story, date) {
     if (headLines.length <= 3) break;
   }
   x.font = `400 37px ${SANS}`;
-  const sumLines = cardWrapText(x, story.summary || "", maxW, 5);
+  const sumLines = cardWrapText(x, decodeEntities(story.summary || ""), maxW, 5);
 
   const chips = [];
   if (story.dealType) chips.push(story.dealType);
@@ -6312,10 +6323,10 @@ function threadCard(t) {
 async function renderThread(slug) {
   const wrap = $("threads-content");
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("All arcs", "#/threads"));
+  wrap.appendChild(backLink("All threads", "#/threads"));
   const threads = await getThreads();
   const t = threads.find((x) => x.slug === slug);
-  if (!t) { wrap.appendChild(emptyPanel("Arc not found", "This storyline isn't on record.")); return; }
+  if (!t) { wrap.appendChild(emptyPanel("Thread not found", "This storyline isn't on record.")); return; }
 
   const head = document.createElement("div");
   head.className = "thread-head";

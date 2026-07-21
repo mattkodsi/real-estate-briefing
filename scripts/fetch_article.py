@@ -173,6 +173,33 @@ def _strip_nav_clutter(body: str) -> str:
     return "".join(toks[i].group(0) for i in range(start, end + 1))
 
 
+_BOILERPLATE_BOUNDARY = re.compile(
+    r"^\s*(recommended for you|related(\s+(stories|articles|content|reading))?\b"
+    r"|more from\b|you (may|might) also like|about\s+.+\s+stock\b|quick insights\b"
+    r"|continue reading(\s+this story)?|log in or register|create a( free)? account"
+    r"|most popular\b|editor'?s picks?\b|read next\b|up next\b|what to read next"
+    r"|subscribe to (read|continue))",
+    re.I)
+
+
+def _cut_at_boilerplate(body: str) -> str:
+    """Truncate where the article ends and the site's recommendation / paywall
+    chrome begins — 'Recommended For You', 'Continue reading with a free account',
+    'Related', 'About <TICKER> Stock', etc. These get swept in AFTER the real text
+    (SeekingAlpha, Bisnow, GlobeSt…) and otherwise dominate the reader. Cut at the
+    first heading (or short standalone line) that matches a known boundary; never
+    on the very first block, so a mis-detected lead never nukes the whole body."""
+    toks = list(_TOP_TAG.finditer(body))
+    for i, m in enumerate(toks):
+        if i == 0:
+            continue
+        t = m.group(1) or "img"
+        text = re.sub(r"<[^>]+>", " ", m.group(0)).strip()
+        if (t in ("h2", "h3") or len(text.split()) <= 9) and _BOILERPLATE_BOUNDARY.match(text):
+            return "".join(toks[j].group(0) for j in range(0, i))
+    return body
+
+
 def _looks_blocked(html: str) -> bool:
     """A Cloudflare/anti-bot interstitial rather than the real article. The
     'Just a moment…' title is Cloudflare's challenge page — an unambiguous
@@ -238,7 +265,8 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
         # tidy: drop empty paragraphs, collapse whitespace
         body = re.sub(r"<(p|h2|h3|li|blockquote)>\s*</\1>", "", body)
         body = re.sub(r"[ \t]+", " ", body)
-        body = _strip_nav_clutter(body)  # drop newsletter/nav headings around the real body
+        body = _strip_nav_clutter(body)   # drop newsletter/nav headings around the real body
+        body = _cut_at_boilerplate(body)  # truncate at 'Recommended For You' / paywall chrome
         return p, body, len(re.sub(r"<[^>]+>", " ", body).split())
 
     # strict pass first; when a page-builder wraps the whole body in a class the
