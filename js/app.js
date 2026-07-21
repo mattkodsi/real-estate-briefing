@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v89";
+const APP_VERSION = "v90";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -2599,17 +2599,19 @@ async function renderTrends() {
   wrap.appendChild(pageHead("The Desk",
     "The market's macro backdrop and every number the briefing accumulates — each board a tap away."));
 
-  // the landing needs six independent tables — fetch them in parallel (one round
-  // trip, not six) so the Desk paints fast on first open
-  const [days, metrics, players, events, threads, campaigns, pulse] = await Promise.all([
-    getAllDays(), getMetrics(), getPlayers(), getEvents(), getThreads(), getCampaigns(), getPulse(),
+  // fetch the landing's tables in parallel (one round trip, not six) so the Desk
+  // paints fast. Market Pulse (getPulse) is the heaviest single row (~200KB) and
+  // the landing only needs its series COUNT — so it's deferred below, off the
+  // critical path, and its stat fills in a beat later.
+  const [days, metrics, players, events, threads, campaigns] = await Promise.all([
+    getAllDays(), getMetrics(), getPlayers(), getEvents(), getThreads(), getCampaigns(),
   ]);
   const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })));
   const priced = stories.filter((s) => s.valueUsd);
   const distress = stories.filter((s) => s.dealType === "Distress");
 
   const stat = {
-    pulse: pulse?.national ? `${Object.keys(pulse.national).length} live + ${metrics.length} cited` : "live data",
+    pulse: `${metrics.length} cited`,   // "N live +" prefix added once pulse loads
     comps: `${new Set(priced.map((s) => s.market).filter(Boolean)).size} markets`,
     caprates: `${stories.filter((s) => capRateOf(s)).length} rates`,
     league: `${players.size} players`,
@@ -2630,12 +2632,20 @@ async function renderTrends() {
   grid.className = "desk-grid";
   for (const item of DESK_CATALOG) grid.appendChild(deskCard(item, stat[item.id]));
   wrap.appendChild(grid);
+
+  // fill the Market Pulse count once its (heavy) row resolves — off the critical path
+  getPulse().then((p) => {
+    if (!p?.national) return;
+    const el = grid.querySelector('[data-desk="pulse"] .dc-stat');
+    if (el) el.textContent = `${Object.keys(p.national).length} live + ${metrics.length} cited`;
+  }).catch(() => {});
 }
 
 function deskCard(item, stat) {
   const a = document.createElement("a");
   a.className = "desk-card" + (item.feature ? " dc-feature" : "");
   a.href = item.hash || `#/desk/${item.id}`;
+  a.dataset.desk = item.id;
   a.innerHTML =
     `<span class="dc-icon">${item.icon}</span>` +
     `<span class="dc-body"><span class="dc-title">${item.title}</span>` +
