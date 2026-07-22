@@ -2902,22 +2902,55 @@ button.cal-open:active { background: var(--rule); }
 .desk-card .dc-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
 .desk-card .dc-stat { font-size: 11px; font-weight: 600; color: var(--ink-2); }
 .desk-card .dc-arrow { color: var(--ink-3); font-size: 18px; }
-/* flagship card spans the row, laid out horizontally */
-.desk-card.dc-feature {
-  grid-column: 1 / -1;
-  flex-direction: row;
-  align-items: center;
-  gap: 14px;
-  min-height: 0;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, var(--box)), var(--box));
-  /* the flagship keeps a faint accent ring — drawn as a shadow now that cards are borderless */
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent), var(--card-shadow);
+/* small uppercase label above each group of boards */
+.desk-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 20px 2px 9px;
 }
-.desk-card.dc-feature .dc-icon { font-size: 30px; }
-.desk-card.dc-feature .dc-body { gap: 4px; }
-.desk-card.dc-feature .dc-title { font-size: 18px; font-family: var(--serif); }
-.desk-card.dc-feature .dc-blurb { font-size: 12.5px; }
-.desk-card.dc-feature .dc-foot { flex-direction: column; align-items: flex-end; gap: 2px; margin: 0; }
+.desk-group-label:first-of-type { margin-top: 6px; }
+
+/* Market Pulse hero — the Desk's live lead card, a snapshot that taps into Pulse */
+.desk-hero {
+  display: block;
+  border-radius: 16px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, var(--box)), var(--box));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent), var(--card-shadow);
+  padding: 15px 16px 14px;
+  text-decoration: none;
+  color: var(--ink);
+  margin-bottom: 4px;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.17s cubic-bezier(.22,.61,.36,1), box-shadow 0.17s ease;
+}
+.desk-hero:active {
+  transform: scale(0.99);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent), var(--card-shadow-press);
+}
+.desk-hero .dh-head { display: flex; align-items: center; gap: 12px; }
+.desk-hero .dh-icon { font-size: 26px; line-height: 1; }
+.desk-hero .dh-titles { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.desk-hero .dh-title { font-size: 18px; font-weight: 700; font-family: var(--serif); }
+.desk-hero .dh-blurb { font-size: 12px; color: var(--ink-3); line-height: 1.35; }
+.desk-hero .dh-arrow { color: var(--ink-3); font-size: 20px; flex: none; }
+.desk-hero .dh-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+.desk-hero .dh-stat {
+  flex: 1 1 auto;
+  min-width: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 4%, var(--box));
+}
+.desk-hero .dhs-v { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.desk-hero .dhs-v.good { color: #1e8e3e; }
+.desk-hero .dhs-v.bad { color: #d23f31; }
+.desk-hero .dhs-k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
 .desk-page { margin-top: 4px; }
 
 /* ============================================================
@@ -3031,8 +3064,8 @@ button.cal-open:active { background: var(--rule); }
 .mm-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 1px; }
 
 @media (prefers-color-scheme: dark) {
-  .pt-chg.good, .pt-spark-line.spark-good, .pmk-v.good, .pmk-yoy.good { color: #5bd07f; }
-  .pt-chg.bad, .pt-spark-line.spark-bad, .pmk-v.bad, .pmk-yoy.bad { color: #ff7b6e; }
+  .pt-chg.good, .pt-spark-line.spark-good, .pmk-v.good, .pmk-yoy.good, .dhs-v.good { color: #5bd07f; }
+  .pt-chg.bad, .pt-spark-line.spark-bad, .pmk-v.bad, .pmk-yoy.bad, .dhs-v.bad { color: #ff7b6e; }
   .pulse-verdict.easy { border-left-color: #5bd07f; }
   .pulse-verdict.tight { border-left-color: #ff7b6e; }
 }

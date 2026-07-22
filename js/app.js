@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v91";
+const APP_VERSION = "v92";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -285,6 +285,8 @@ async function init() {
   // entity/term links live inside clickable cards; capture phase wins over the
   // card's own click. They open the mini-dossier sheet (full page one tap away).
   document.addEventListener("click", (e) => {
+    // a hold-peek just released on this element — swallow the tap it would fire
+    if (peekSwallowClick) { peekSwallowClick = false; e.preventDefault(); e.stopPropagation(); return; }
     const entity = e.target.closest?.(".entity-link");
     if (entity) {
       e.preventDefault();
@@ -306,9 +308,9 @@ async function init() {
   sheetCard.addEventListener("touchmove", (e) => {
     if (sheetDragY === null) return;
     const dy = e.touches[0].clientY - sheetDragY;
-    // downward always drags; upward drags too on a story peek (fling up = open),
+    // downward always drags; upward drags too on a peek (fling up = open),
     // otherwise upward stays a scroll on tall dossier sheets
-    if (dy > 0 || peekTarget) { e.preventDefault(); sheetDragMove(e.touches[0].clientY); }
+    if (dy > 0 || peekFling) { e.preventDefault(); sheetDragMove(e.touches[0].clientY); }
   }, { passive: false });
   sheetCard.addEventListener("touchend", () => sheetDragEnd());
   sheetCard.addEventListener("touchcancel", () => sheetDragEnd());
@@ -323,6 +325,7 @@ async function init() {
   }, { passive: true });
   reader.addEventListener("touchmove", (e) => {
     if (!rt) return;
+    if (peekActive) return; // a hold-peek (inline link) owns the finger — stand down
     rt.dx = e.touches[0].clientX - rt.x;
     rt.dy = e.touches[0].clientY - rt.y;
     if (!rt.axis && (Math.abs(rt.dx) > 10 || Math.abs(rt.dy) > 10)) {
@@ -371,15 +374,22 @@ async function init() {
   const feed = $("feed");
   let ft = null;
   feed.addEventListener("touchstart", (e) => {
+    if (e.touches.length !== 1) { ft = null; return; }
+    // an inline entity/term link inside a card peeks the ENTITY; anywhere else on
+    // the card peeks the STORY (and still supports swipe-to-save/read)
+    const link = e.target.closest(".entity-link[data-slug], .term-link[data-slug]");
     const card = e.target.closest(".story[data-id]");
-    if (!card || e.touches.length !== 1) { ft = null; return; }
+    if (!card && !link) { ft = null; return; }
     const t = e.touches[0];
-    ft = { card, x: t.clientX, y: t.clientY, dx: 0, horiz: false, moved: false, mode: null };
+    ft = { card, link, x: t.clientX, y: t.clientY, dx: 0, horiz: false, moved: false, mode: null };
     ft.timer = setTimeout(() => {
       // fire at the very edge of a normal tap: a real click lifts the finger
       // before this (so it opens the reader, no peek), but any actual hold trips
       // it near-instantly — the preview feels immediate, not a deliberate wait.
-      if (ft && !ft.moved) { ft.mode = "peek"; openStoryPeek(card.dataset.date, card.dataset.id, card.getBoundingClientRect()); }
+      if (!ft || ft.moved) return;
+      ft.mode = "peek";
+      if (link) peekEntityLink(link);
+      else openStoryPeek(card.dataset.date, card.dataset.id, card.getBoundingClientRect());
     }, 120);
   }, { passive: true });
   feed.addEventListener("touchmove", (e) => {
@@ -396,7 +406,7 @@ async function init() {
       ft.moved = true; clearTimeout(ft.timer);
       ft.horiz = Math.abs(dx) > Math.abs(dy);
     }
-    if (ft.horiz) {
+    if (ft.horiz && ft.card) {
       e.preventDefault();
       ft.dx = dx;
       ft.card.style.transition = "none";
@@ -408,8 +418,9 @@ async function init() {
   const endFeed = (e) => {
     if (!ft) return;
     clearTimeout(ft.timer);
-    if (ft.mode === "peek") { sheetDragEnd(); if (e && e.cancelable) e.preventDefault(); ft = null; return; }
+    if (ft.mode === "peek") { peekSwallowClick = true; sheetDragEnd(); if (e && e.cancelable) e.preventDefault(); ft = null; return; }
     const { card, dx, horiz } = ft;
+    if (!card) { ft = null; return; } // inline-link press that never became a peek — let the tap through
     card.style.transition = "transform .2s ease";
     card.style.transform = "";
     card.classList.remove("swipe-save", "swipe-read");
@@ -429,6 +440,61 @@ async function init() {
   };
   feed.addEventListener("touchend", endFeed, { passive: false });
   feed.addEventListener("touchcancel", endFeed, { passive: false });
+
+  // Universal hold-to-peek for everything OUTSIDE the feed: player/thread/canopy
+  // cards, inline entity & term links (dictionary words + people), and any story
+  // card that carries data-peek. Hold to grow the preview, then fling up to open /
+  // down to dismiss — all with the same finger, never leaving the screen. A normal
+  // tap never trips it (the finger lifts before the 140ms timer). Surfaces that own
+  // their own gestures are skipped so nothing double-fires.
+  let gp = null;
+  const PEEK_SKIP = "#feed, #sheet, #reader, #lightbox, #sharebox, #profiles, .masthead, .player-avatar, .map-toggle, .pcp-ranges, .pcp-close, .curve-wrap, .pt-spark";
+  document.addEventListener("touchstart", (e) => {
+    peekSwallowClick = false;
+    if (e.touches.length !== 1) { gp = null; return; }
+    const target = e.target;
+    if (target.closest?.(PEEK_SKIP)) { gp = null; return; }
+    const el = peekableEl(target);
+    if (!el) { gp = null; return; }
+    const t = e.touches[0];
+    gp = { el, x: t.clientX, y: t.clientY, moved: false, active: false, rect: el.getBoundingClientRect() };
+    gp.timer = setTimeout(() => {
+      if (!gp || gp.moved) return;
+      gp.active = true; peekActive = true;
+      peekOpenFor(gp.el, gp.rect);
+    }, 140);
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!gp) return;
+    const t = e.touches[0];
+    if (gp.active) {
+      e.preventDefault();
+      if (sheetDragY === null) sheetDragStart(t.clientY); // lazy: start the drag where the finger is now
+      sheetDragMove(t.clientY);
+      return;
+    }
+    if (Math.abs(t.clientX - gp.x) > 8 || Math.abs(t.clientY - gp.y) > 8) { gp.moved = true; clearTimeout(gp.timer); }
+  }, { passive: false });
+  const endGeneric = (e) => {
+    if (!gp) return;
+    clearTimeout(gp.timer);
+    const wasActive = gp.active;
+    gp = null;
+    if (wasActive) {
+      peekActive = false;
+      peekSwallowClick = true;               // eat the tap that release would fire on the pressed element
+      setTimeout(() => { peekSwallowClick = false; }, 500);
+      sheetDragEnd();
+      if (e && e.cancelable) e.preventDefault();
+    }
+  };
+  document.addEventListener("touchend", endGeneric, { passive: false });
+  document.addEventListener("touchcancel", endGeneric, { passive: false });
+  // one capture-phase swallow, registered before the entity/term click handler
+  // below, so a peek-release never also opens the link or navigates the card
+  document.addEventListener("click", (e) => {
+    if (peekSwallowClick) { peekSwallowClick = false; e.preventDefault(); e.stopPropagation(); }
+  }, true);
 
   // share the open story as a typographic image card
   $("reader-share").addEventListener("click", () => {
@@ -2582,15 +2648,24 @@ function leagueRow({ p, count, volume }, rank) {
    and catalysts first, then the deal-level analytics that sharpen as coverage
    accumulates, then the macro backdrop. Each opens its own full board. */
 const DESK_CATALOG = [
-  { id: "threads", icon: "🧵", title: "Threads & Canopies", blurb: "Running storylines — same property, deal, case or company event — and the agendas that group them", hash: "#/threads", feature: true },
+  { id: "threads", icon: "🧵", title: "Threads & Canopies", blurb: "Running storylines and the agendas that group them", hash: "#/threads" },
   { id: "calendar", icon: "📅", title: "Calendar", blurb: "Upcoming catalysts — auctions, court dates, Fed decisions", hash: "#/calendar" },
   { id: "league", icon: "🏆", title: "League Tables", blurb: "Most-active buyers, lenders, developers and brokers" },
-  { id: "comps", icon: "🏙️", title: "Comps", blurb: "$/sf and $/unit medians, delineated by market and asset class" },
-  { id: "caprates", icon: "🎯", title: "Cap Rates", blurb: "What each market is pricing, straight from deal coverage" },
+  { id: "comps", icon: "🏙️", title: "Comps", blurb: "$/sf and $/unit medians by market and asset class" },
+  { id: "caprates", icon: "🎯", title: "Cap Rates", blurb: "What each market is pricing, from deal coverage" },
   { id: "distress", icon: "⚠️", title: "Distress Watch", blurb: "Defaults, foreclosures and forced sales as they surface" },
   { id: "ledger", icon: "💵", title: "Deal Ledger", blurb: "Every priced deal, filterable and sortable" },
   { id: "pulse", icon: "📈", title: "Market Pulse", blurb: "The market backdrop — the full rate curve, home prices, rents, credit, all in one place" },
   { id: "coverage", icon: "🔥", title: "Coverage Pulse", blurb: "What the desks are covering this week versus last" },
+];
+
+// The landing groups the boards into a sensible order instead of one flat wall of
+// tiles: pricing first (what a NY investor lives on), then market movement, then
+// the storyline/calendar trackers. Market Pulse leads on its own as a live hero.
+const DESK_GROUPS = [
+  { label: "Deals & pricing", ids: ["comps", "caprates", "ledger"] },
+  { label: "Market movements", ids: ["distress", "league", "coverage"] },
+  { label: "Storylines & dates", ids: ["threads", "calendar"] },
 ];
 
 async function renderTrends() {
@@ -2628,17 +2703,78 @@ async function renderTrends() {
     })(),
   };
 
-  const grid = document.createElement("div");
-  grid.className = "desk-grid";
-  for (const item of DESK_CATALOG) grid.appendChild(deskCard(item, stat[item.id]));
-  wrap.appendChild(grid);
+  // Market Pulse leads as a live snapshot hero (rates now, the rest fills once the
+  // heavy pulse row resolves — off the critical path so the Desk paints instantly).
+  const hero = deskPulseHero();
+  wrap.appendChild(hero);
+  fillHeroStats(hero.querySelector(".dh-stats"), null);
 
-  // fill the Market Pulse count once its (heavy) row resolves — off the critical path
-  getPulse().then((p) => {
-    if (!p?.national) return;
-    const el = grid.querySelector('[data-desk="pulse"] .dc-stat');
-    if (el) el.textContent = `${Object.keys(p.national).length} live + ${metrics.length} cited`;
-  }).catch(() => {});
+  // the rest of the boards, grouped and labelled instead of one flat wall of tiles
+  const byId = new Map(DESK_CATALOG.map((i) => [i.id, i]));
+  for (const g of DESK_GROUPS) {
+    const lbl = document.createElement("div");
+    lbl.className = "desk-group-label";
+    lbl.textContent = g.label;
+    wrap.appendChild(lbl);
+    const grid = document.createElement("div");
+    grid.className = "desk-grid";
+    for (const id of g.ids) {
+      const item = byId.get(id);
+      if (item) grid.appendChild(deskCard(item, stat[id]));
+    }
+    wrap.appendChild(grid);
+  }
+
+  // fill the hero's live figures once the (heavy) pulse row resolves
+  getPulse().then((p) => { if (p) fillHeroStats(hero.querySelector(".dh-stats"), p); }).catch(() => {});
+}
+
+/* The Desk's lead card: Market Pulse as a live snapshot — a handful of the numbers
+   a NY investor scans first, tapping straight into the full Pulse board. Rate chips
+   paint immediately from the cached curve; mortgage/prices/credit fill from pulse. */
+function deskPulseHero() {
+  const a = document.createElement("a");
+  a.className = "desk-hero";
+  a.href = "#/desk/pulse";
+  a.dataset.desk = "pulse";
+  const head = document.createElement("div");
+  head.className = "dh-head";
+  head.innerHTML =
+    '<span class="dh-icon">📈</span>' +
+    '<span class="dh-titles"><span class="dh-title">Market Pulse</span>' +
+    '<span class="dh-blurb">The macro backdrop — rates, home prices, rents and credit, one read</span></span>' +
+    '<span class="dh-arrow">›</span>';
+  const row = document.createElement("div");
+  row.className = "dh-stats";
+  a.append(head, row);
+  return a;
+}
+
+function fillHeroStats(row, pulse) {
+  if (!row) return;
+  const out = [];
+  const r = state.rates;
+  if (r?.treasury?.["10Y"] != null) out.push(["10Y UST", r.treasury["10Y"].toFixed(2) + "%"]);
+  if (r?.sofr?.rate != null) out.push(["SOFR", r.sofr.rate.toFixed(2) + "%"]);
+  const n = pulse?.national || {};
+  if (n.mortgage30?.latest) out.push(["30Y Mortgage", n.mortgage30.latest.value.toFixed(2) + "%"]);
+  if (n.hpi?.yoy != null) out.push(["Home prices", signed(n.hpi.yoy) + "% YoY", n.hpi.yoy >= 0 ? "good" : "bad"]);
+  if (n.cre_delinq?.latest) out.push(["CRE delinq.", n.cre_delinq.latest.value.toFixed(2) + "%"]);
+  if (!out.length) { row.style.display = "none"; return; }
+  row.style.display = "";
+  row.innerHTML = "";
+  for (const [label, val, tone] of out) {
+    const c = document.createElement("div");
+    c.className = "dh-stat";
+    const v = document.createElement("span");
+    v.className = "dhs-v" + (tone ? " " + tone : "");
+    v.textContent = val;
+    const k = document.createElement("span");
+    k.className = "dhs-k";
+    k.textContent = label;
+    c.append(v, k);
+    row.appendChild(c);
+  }
 }
 
 function deskCard(item, stat) {
@@ -2749,17 +2885,9 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
   vb.innerHTML = `<span class="pv-kicker">The read</span><p class="pv-text">${verdict.text}</p>`;
   wrap.appendChild(vb);
 
-  // if a signal's chart is open, show it up top — and when it was JUST opened,
-  // smooth-scroll it into view (you tapped a tile lower down; bring the chart to you)
+  // a tapped signal's chart now opens INLINE, right under its own tile (see
+  // paintGroup) — not floated to the top of the page, which read as disconnected
   const openSeries = resolvePulseSeries(pulse, state.pulseKey);
-  if (openSeries) {
-    const panel = pulseChartPanel(openSeries);
-    wrap.appendChild(panel);
-    if (state.pulseChartScroll) {
-      state.pulseChartScroll = false;
-      requestAnimationFrame(() => smoothScrollIntoView(panel));
-    }
-  }
 
   // group tabs
   const tabs = document.createElement("div");
@@ -2781,9 +2909,13 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
   const groupBox = document.createElement("div");
   wrap.appendChild(groupBox);
   const order = pulse.order || Object.keys(n);
-    // Treasury tiles the curve already plots — skipped in the rates tab so nothing
-    // shows twice (the interest-rate tool below owns the whole curve)
-    const skipInRates = new Set(["ust2y", "ust10y", "spread"]);
+    // Only the 10Y is dropped from the rates tab's tile grid — the curve tool above
+    // already carries it as a scrubbable key-rate. EVERYTHING ELSE shows: the 2Y and
+    // the 2s10s spread live here as their own tiles, and the FRED `credit` series
+    // (CRE / residential delinquency) fold into this same Rates & Credit tab (their
+    // group is remapped below) so no signal is ever silently missing.
+    const skipInRates = new Set(["ust10y"]);
+    const groupOf = (s) => (s.group === "credit" ? "rates" : s.group);
     function paintGroup() {
     groupBox.innerHTML = "";
     // Rates & Credit leads with the full interest-rate tool (Treasury curve /
@@ -2799,7 +2931,7 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
     grid.className = "pulse-grid";
     for (const key of order) {
       const s = n[key];
-      if (!s || s.group !== state.pulseGroup) continue;
+      if (!s || groupOf(s) !== state.pulseGroup) continue;
       if (state.pulseGroup === "rates" && skipInRates.has(key)) continue;
       grid.appendChild(pulseTile(s));
     }
@@ -2809,9 +2941,24 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
       if (pulse.zillowNational.value) grid.appendChild(pulseZillowTile("Home Value (Zillow)", "value", pulse.zillowNational.value));
     }
     if (grid.children.length) {
-      // in the rates tab these are the rates the curve doesn't carry (mortgage, policy)
-      if (state.pulseGroup === "rates") groupBox.appendChild(subHead("Mortgage & policy", "Rates beyond the Treasury curve"));
+      // in the rates tab these are the series beyond the Treasury curve: the 2Y,
+      // the 2s10s spread, mortgage/policy rates, and CRE/resi credit delinquency
+      if (state.pulseGroup === "rates") groupBox.appendChild(subHead("Rates, spreads & credit", "Every rate and credit series beyond the Treasury curve"));
       groupBox.appendChild(grid);
+      // the open signal's chart drops in RIGHT UNDER its own tile (full-width),
+      // so opening a stat expands it in context instead of floating to the top
+      if (openSeries) {
+        const onTile = grid.querySelector(".pulse-tile.on");
+        if (onTile) {
+          const panel = pulseChartPanel(openSeries);
+          panel.style.gridColumn = "1 / -1";
+          onTile.after(panel);
+          if (state.pulseChartScroll) {
+            state.pulseChartScroll = false;
+            requestAnimationFrame(() => smoothScrollIntoView(panel));
+          }
+        }
+      }
     }
     // CRE figures the trade press cites (Trepp delinquency, CBRE vacancy, cap-rate
     // surveys) — the numbers public APIs don't carry. Shown right under the matching
@@ -3517,6 +3664,8 @@ function renderPlayerList(all) {
 function playerCard(p) {
   const el = document.createElement("button");
   el.className = "player-card";
+  el.dataset.peek = "player";
+  el.dataset.peekSlug = p.slug;
   el.addEventListener("click", () => { location.hash = `/player/${p.slug}`; });
 
   const head = document.createElement("div");
@@ -4946,9 +5095,11 @@ function openSheet(build, opts) {
   card.style.transform = "";    // CSS .open rise/fall animates cleanly
   card.style.opacity = "";
   card.style.transformOrigin = "";
-  // a story peek grows out of the card into a floating rounded card; the
-  // dossier sheets stay as bottom sheets. The .peek class swaps the CSS.
+  // a peek grows out of the pressed card into a floating rounded card; a
+  // tapped dossier stays a bottom sheet. The .peek class swaps the CSS, and
+  // onFling (if given) is what a fling-up-to-open does for this sheet.
   sheet.classList.toggle("peek", !!opts.peek);
+  peekFling = opts.onFling || null;
   build(card);
   sheet.hidden = false;
   document.body.classList.add("sheet-open"); // suppresses page-wide text selection
@@ -4988,7 +5139,7 @@ function closeSheet() {
   const sheet = $("sheet");
   const card = $("sheet-card");
   card.style.transition = ""; card.style.transform = ""; // let CSS animate the fall
-  peekTarget = null; sheetDragY = null;
+  peekFling = null; sheetDragY = null;
   sheet.classList.remove("open");
   document.body.classList.remove("sheet-open");
   setTimeout(() => { sheet.hidden = true; }, 260);
@@ -5005,7 +5156,9 @@ function sheetGo(hash) {
    flings up to open the story. */
 let sheetDragY = null;   // start Y of an active drag, or null when idle
 let sheetDy = 0;
-let peekTarget = null;   // {date,id} a story peek can fling up to open
+let peekFling = null;    // () => void: what a fling-up-to-open does (story→reader, dossier→full page); null = fling-up just settles
+let peekActive = false;  // true while a generic hold-peek owns the finger — other gesture handlers stand down
+let peekSwallowClick = false; // eat the synthetic click that a peek-release would otherwise fire on the pressed element
 
 function sheetDragStart(y) { sheetDragY = y; sheetDy = 0; }
 function sheetDragMove(y) {
@@ -5021,7 +5174,7 @@ function sheetDragEnd() {
   const dy = sheetDy;
   sheetDragY = null; sheetDy = 0;
   if (dy > 90) sheetDismiss();
-  else if (dy < -55 && peekTarget) sheetOpenStory();
+  else if (dy < -55 && peekFling) peekFling();
   else sheetSettle();
 }
 function sheetSettle() {
@@ -5033,19 +5186,48 @@ function sheetDismiss() {
   const c = $("sheet-card");
   c.style.transition = "transform .24s cubic-bezier(.35,0,.7,1)";
   c.style.transform = "translateY(110%)";
-  peekTarget = null; sheetDragY = null;
+  peekFling = null; sheetDragY = null;
   document.body.classList.remove("sheet-open");
   setTimeout(() => { const s = $("sheet"); s.classList.remove("open"); s.hidden = true; }, 220);
 }
-function sheetOpenStory() {
-  const t = peekTarget; peekTarget = null; sheetDragY = null;
+// fling a STORY peek up into the full reader: leave the sheet frozen where the
+// fling left it and let openReaderRoute slide the article UP over it — one
+// continuous upward motion, the peek "growing" into the article.
+function sheetOpenStory(date, id) {
+  peekFling = null; sheetDragY = null;
   document.body.classList.remove("sheet-open");
-  if (!t) { closeSheet(); return; }
-  // Don't fade the sheet out. Leave it frozen where the fling left it and let
-  // openReaderRoute slide the full story UP over it — one continuous upward
-  // motion, the peek "growing" into the article rather than vanishing.
   readerSlideIn = true;
-  location.hash = `/story/${t.date}/${t.id}`;
+  location.hash = `/story/${date}/${id}`;
+}
+
+/* ---------- universal hold-to-peek ----------
+   Any element carrying data-peek (player/thread/canopy/story cards) or an inline
+   .entity-link / .term-link can be held to grow its preview sheet. peekableEl()
+   finds the nearest such element under a touch; peekOpenFor() opens the right
+   sheet, growing it out of that element's on-screen rect. The feed keeps its own
+   richer handler (it also carries swipe-to-save/read). */
+const PEEK_SEL = "[data-peek], .entity-link[data-slug], .term-link[data-slug]";
+
+function peekableEl(target) {
+  return target?.closest?.(PEEK_SEL) || null;
+}
+
+function peekOpenFor(el, rect) {
+  if (el.matches?.(".term-link[data-slug]")) return openTermSheet(el.dataset.slug, rect);
+  if (el.matches?.(".entity-link[data-slug]")) return openPlayerSheet(el.dataset.slug, rect);
+  const kind = el.dataset.peek, slug = el.dataset.peekSlug;
+  if (kind === "player") return openPlayerSheet(slug, rect);
+  if (kind === "term") return openTermSheet(slug, rect);
+  if (kind === "thread") return openThreadPeek(slug, rect);
+  if (kind === "canopy") return openCanopyPeek(slug, rect);
+  if (kind === "story") return openStoryPeek(el.dataset.peekDate, el.dataset.peekId, rect);
+}
+
+// peek an inline entity/term link pressed inside a feed card (feed handler path)
+function peekEntityLink(el) {
+  const r = el.getBoundingClientRect();
+  if (el.classList.contains("term-link")) openTermSheet(el.dataset.slug, r);
+  else openPlayerSheet(el.dataset.slug, r);
 }
 
 // long-press peek: summary + hero in a floating card that grows out of the
@@ -5053,7 +5235,7 @@ function sheetOpenStory() {
 function openStoryPeek(date, id, originRect) {
   const story = (state.days.get(date)?.stories || []).find((s) => s.id === id);
   if (!story) return;
-  peekTarget = isExpandable(story) ? { date, id } : null;
+  const expandable = isExpandable(story);
   openSheet((card) => {
     if (story.image && !isJunkImageUrl(story.image)) {
       const fig = document.createElement("div");
@@ -5078,23 +5260,24 @@ function openStoryPeek(date, id, originRect) {
     card.append(k, h, p);
     const chips = storyChips(story, date);
     if (chips) { chips.classList.add("peek-chips"); card.appendChild(chips); }
-    if (isExpandable(story)) {
+    if (expandable) {
       const open = document.createElement("button");
       open.className = "peek-open";
       open.textContent = "Open story →";
-      open.addEventListener("click", () => sheetOpenStory());
+      open.addEventListener("click", () => sheetOpenStory(date, id));
       card.appendChild(open);
     }
-  }, { peek: true, originRect }); // grow into a floating rounded card from the pressed card
+  }, { peek: true, originRect, onFling: expandable ? () => sheetOpenStory(date, id) : null }); // grow into a floating rounded card from the pressed card
   // NB: we do NOT start the drag here — the feed handler lazy-starts it on the
   // first finger move (capturing the finger's position then), so the card never
   // snaps from mid-rise to the finger. `fromY` is unused now, kept for clarity.
 }
 
-async function openPlayerSheet(slug) {
+async function openPlayerSheet(slug, originRect) {
   const players = await getPlayers();
   const p = players.get(slug);
   if (!p) { location.hash = `/player/${slug}`; return; }
+  const peekOpts = originRect ? { peek: true, originRect, onFling: () => sheetGo(`/player/${slug}`) } : {};
   openSheet((card) => {
     const head = document.createElement("button");
     head.className = "sheet-head";
@@ -5167,13 +5350,14 @@ async function openPlayerSheet(slug) {
     full.textContent = "Full profile →";
     full.addEventListener("click", () => sheetGo(`/player/${slug}`));
     card.appendChild(full);
-  });
+  }, peekOpts);
 }
 
-async function openTermSheet(slug) {
+async function openTermSheet(slug, originRect) {
   const terms = await getTerms();
   const t = terms.get(slug);
   if (!t) { location.hash = `/term/${slug}`; return; }
+  const peekOpts = originRect ? { peek: true, originRect, onFling: () => sheetGo(`/term/${slug}`) } : {};
   openSheet((card) => {
     const head = document.createElement("button");
     head.className = "sheet-head";
@@ -5204,7 +5388,144 @@ async function openTermSheet(slug) {
     full.textContent = "Full entry →";
     full.addEventListener("click", () => sheetGo(`/term/${slug}`));
     card.appendChild(full);
-  });
+  }, peekOpts);
+}
+
+/* Hold-to-peek a thread: its anchor + the two most recent installments, each a
+   tap-through to that story, with the full timeline one fling (or tap) away. */
+async function openThreadPeek(slug, originRect) {
+  const threads = await getThreads();
+  const t = threads.find((x) => x.slug === slug);
+  if (!t) { location.hash = `/thread/${slug}`; return; }
+  const peekOpts = originRect ? { peek: true, originRect, onFling: () => sheetGo(`/thread/${slug}`) } : {};
+  openSheet((card) => {
+    const head = document.createElement("button");
+    head.className = "sheet-head";
+    head.addEventListener("click", () => sheetGo(`/thread/${slug}`));
+    const ht = document.createElement("span");
+    ht.className = "sheet-head-text";
+    const nm = document.createElement("span");
+    nm.className = "sheet-name";
+    nm.textContent = t.title || slug;
+    const rl = document.createElement("span");
+    rl.className = "sheet-role";
+    const n = (t.entries || []).length;
+    rl.textContent = `${t.status === "resolved" ? "Resolved" : "Active"} thread · ${n} ${n === 1 ? "story" : "stories"}`;
+    ht.append(nm, rl);
+    head.appendChild(ht);
+    const arrow = document.createElement("span");
+    arrow.className = "sheet-arrow";
+    arrow.textContent = "›";
+    head.appendChild(arrow);
+    card.appendChild(head);
+
+    if (t.anchor) {
+      const a = document.createElement("p");
+      a.className = "sheet-tagline";
+      a.textContent = t.anchor;
+      card.appendChild(a);
+    }
+
+    // newest-first entries (stored newest-first already); show the latest two
+    const ms = (t.entries || []).slice(0, 2);
+    if (ms.length) {
+      const lbl = document.createElement("div");
+      lbl.className = "sheet-label";
+      lbl.textContent = "Latest";
+      card.appendChild(lbl);
+      for (const m of ms) {
+        const row = document.createElement("button");
+        row.className = "sheet-mention";
+        const d = document.createElement("span");
+        d.className = "sm-date";
+        d.textContent = formatDate(m.date, { month: "short", day: "numeric" });
+        const tt = document.createElement("span");
+        tt.className = "sm-title";
+        tt.textContent = m.delta || m.title;
+        row.append(d, tt);
+        row.addEventListener("click", () => sheetGo(`/story/${m.date}/${m.id}`));
+        card.appendChild(row);
+      }
+    }
+
+    const full = document.createElement("button");
+    full.className = "sheet-full";
+    full.textContent = "Full timeline →";
+    full.addEventListener("click", () => sheetGo(`/thread/${slug}`));
+    card.appendChild(full);
+  }, peekOpts);
+}
+
+/* Hold-to-peek a canopy: its driver, the through-line, and its fronts count,
+   with the full trunk→branches→leaves tree one fling (or tap) away. */
+async function openCanopyPeek(slug, originRect) {
+  const [campaigns, threads] = await Promise.all([getCampaigns(), getThreads()]);
+  const c = campaigns.find((x) => x.slug === slug);
+  if (!c) { location.hash = `/campaign/${slug}`; return; }
+  const threadMap = new Map(threads.map((t) => [t.slug, t]));
+  const peekOpts = originRect ? { peek: true, originRect, onFling: () => sheetGo(`/campaign/${slug}`) } : {};
+  openSheet((card) => {
+    const head = document.createElement("button");
+    head.className = "sheet-head";
+    head.addEventListener("click", () => sheetGo(`/campaign/${slug}`));
+    const ht = document.createElement("span");
+    ht.className = "sheet-head-text";
+    const nm = document.createElement("span");
+    nm.className = "sheet-name";
+    nm.textContent = "🌳 " + (c.title || slug);
+    const rl = document.createElement("span");
+    rl.className = "sheet-role";
+    const nb = (c.branches || []).length;
+    const ns = campaignStoryCount(c, threadMap);
+    rl.textContent = `${nb} ${nb === 1 ? "front" : "fronts"} · ${ns} ${ns === 1 ? "story" : "stories"}`;
+    ht.append(nm, rl);
+    head.appendChild(ht);
+    const arrow = document.createElement("span");
+    arrow.className = "sheet-arrow";
+    arrow.textContent = "›";
+    head.appendChild(arrow);
+    card.appendChild(head);
+
+    if (c.driver) {
+      const dv = document.createElement("p");
+      dv.className = "sheet-tagline";
+      dv.style.color = "var(--accent)";
+      dv.style.fontWeight = "600";
+      dv.textContent = `Driven by ${c.driver}`;
+      card.appendChild(dv);
+    }
+    if (c.throughLine) {
+      const tl = document.createElement("p");
+      tl.className = "sheet-tagline";
+      tl.textContent = c.throughLine;
+      card.appendChild(tl);
+    }
+
+    // the fronts (branches), each a tap-through to the campaign page
+    const branches = (c.branches || []).slice(0, 4);
+    if (branches.length) {
+      const lbl = document.createElement("div");
+      lbl.className = "sheet-label";
+      lbl.textContent = "Fronts";
+      card.appendChild(lbl);
+      for (const b of branches) {
+        const row = document.createElement("button");
+        row.className = "sheet-mention";
+        const tt = document.createElement("span");
+        tt.className = "sm-title";
+        tt.textContent = b.title || (b.thread && threadMap.get(b.thread)?.title) || "Front";
+        row.appendChild(tt);
+        row.addEventListener("click", () => sheetGo(`/campaign/${slug}`));
+        card.appendChild(row);
+      }
+    }
+
+    const full = document.createElement("button");
+    full.className = "sheet-full";
+    full.textContent = "Open the tree →";
+    full.addEventListener("click", () => sheetGo(`/campaign/${slug}`));
+    card.appendChild(full);
+  }, peekOpts);
 }
 
 function closeReaderNav() {
@@ -6470,6 +6791,8 @@ async function renderThreads() {
 function canopyCard(c, threadMap) {
   const btn = document.createElement("button");
   btn.className = "thread-card canopy-card";
+  btn.dataset.peek = "canopy";
+  btn.dataset.peekSlug = c.slug;
   btn.addEventListener("click", () => { location.hash = `/campaign/${c.slug}`; });
   const top = document.createElement("div");
   top.className = "thread-card-top";
@@ -6495,6 +6818,8 @@ function canopyCard(c, threadMap) {
 function threadCard(t) {
   const btn = document.createElement("button");
   btn.className = "thread-card";
+  btn.dataset.peek = "thread";
+  btn.dataset.peekSlug = t.slug;
   btn.addEventListener("click", () => { location.hash = `/thread/${t.slug}`; });
   const top = document.createElement("div");
   top.className = "thread-card-top";
