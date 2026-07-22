@@ -2036,6 +2036,35 @@ button.heat-cell:active { outline: 1.5px solid var(--ink); }
 .status-value.bad { color: #d23f31; }
 .status-value.quiet { color: var(--ink-3); font-weight: 400; }
 .status-note { font-size: 11px; color: var(--ink-3); margin: 10px 0 0; line-height: 1.5; }
+.status-action {
+  margin-top: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: none;
+  border-radius: 11px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 13.5px;
+  font-weight: 600;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.status-action:active { transform: scale(0.985); }
+.status-action:disabled { opacity: 0.55; }
+
+/* slim connectivity banner at the very top of the flow; only shown while offline
+   (takes no space when hidden). Carries the notch inset so the masthead below it
+   drops its own top inset, avoiding a double gap. */
+.offline-banner {
+  padding: calc(7px + env(safe-area-inset-top)) 14px 7px;
+  background: #8a3b46;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+body.is-offline .masthead { padding-top: 12px; }
 
 /* Connections: reconnect button on session rows, proactive banner, reconnect sheet */
 .status-row:has(.status-reconnect) .status-label { flex: 1 1 auto; }

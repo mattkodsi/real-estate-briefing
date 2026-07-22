@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v92";
+const APP_VERSION = "v93";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -213,6 +213,7 @@ const state = {
   trendFilters: { market: null, asset: null, type: null }, // Deal Ledger filters
   searchQuery: "",
   reader: null,        // { story, date } currently open in the reader
+  offlineReady: null,  // { at, dates } — recent days whose full content is cached for the train
 };
 
 const FWD_HORIZONS = { "30D": 1, "90D": 3, "6M": 6, "1Y": 12, "3Y": 36, "5Y": 60 };
@@ -266,9 +267,17 @@ async function init() {
     showProfilePicker(false);
   });
 
+  // remember what's already saved for offline (survives reloads) + wire the
+  // online/offline banner and an auto re-cache whenever we regain connectivity
+  try { state.offlineReady = JSON.parse(localStorage.getItem(OFFLINE_KEY)) || null; } catch { /* ignore */ }
+  window.addEventListener("online", () => setOnlineState(true));
+  window.addEventListener("offline", () => setOnlineState(false));
+  setOnlineState(navigator.onLine);
+
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       refreshData(true);
+      preloadForOffline(false); // keep the offline cache fresh each time the app is reopened
       paintBellDot();
       try { navigator.clearAppBadge?.(); } catch { /* unsupported */ }
     }
@@ -629,6 +638,9 @@ async function init() {
   });
 
   route();
+  // once the first screen is painted, quietly warm the offline cache so the
+  // train ride has the last few days' article text without any manual step
+  setTimeout(() => preloadForOffline(false), 1800);
   // self-heal push subscriptions left on a rotated VAPID key (best-effort, async)
   reconcilePushSub();
   // warm the canopy registry so story cards can show their 🌳 chip; if we're on
@@ -663,6 +675,62 @@ async function getAllDays() {
     state.allDays = rows.map((r) => r.data).filter(Boolean);
   } catch { state.allDays = []; }
   return state.allDays;
+}
+
+/* ---------- offline reading ----------
+   The app is network-first (SW keeps the last good copy of every Supabase read),
+   so on the train you can only read what was cached while online — and only as
+   fresh as your last fetch. This proactively pulls the most recent days' FULL
+   content (each day row carries every story's article text) so the SW caches them
+   and every already-filled story becomes readable offline. It runs after boot, on
+   focus, and the moment you come back online, and can be forced from the Status
+   page. Throttled so it's never a bandwidth hog. */
+const OFFLINE_DAYS = 6;
+const OFFLINE_KEY = "briefing_offline_v1";
+let lastPreload = 0;
+let preloading = false;
+
+async function preloadForOffline(manual) {
+  if (preloading) return;
+  if (!navigator.onLine) { if (manual) flashToast("You're offline — reconnect to save the latest"); return; }
+  const now = Date.now();
+  if (!manual && now - lastPreload < 4 * 60 * 1000) return; // at most every ~4 min unless forced
+  preloading = true;
+  lastPreload = now;
+  const dates = state.dates.slice(-OFFLINE_DAYS).reverse(); // newest first — today matters most
+  let ok = 0;
+  try {
+    for (const [i, date] of dates.entries()) {
+      // Bandwidth: a background pass only refreshes what's likely to have changed —
+      // today (i===0, still filling) plus any day not cached yet. A manual "Save
+      // now" always re-pulls all six. Already-cached past days still count as ready.
+      if (!manual && i > 0 && state.days.has(date)) { ok++; continue; }
+      try {
+        // force a fresh network read so the SW re-caches the LATEST filled content
+        // (state.days may hold an older copy from before the fill loop caught up)
+        const rows = await sb(`days?date=eq.${date}&select=data`);
+        const day = rows[0]?.data;
+        if (day) { state.days.set(date, day); ok++; }
+      } catch { /* transient / went offline mid-run — next focus retries */ }
+    }
+  } finally { preloading = false; }
+  if (ok) {
+    state.offlineReady = { at: new Date().toISOString(), dates: dates.slice(0, ok) };
+    try { localStorage.setItem(OFFLINE_KEY, JSON.stringify(state.offlineReady)); } catch { /* private mode */ }
+    if (manual) flashToast(`Saved ${ok} day${ok === 1 ? "" : "s"} for offline`);
+    if (location.hash.startsWith("#/status")) route();
+  } else if (manual) {
+    flashToast("Couldn't save for offline — try again");
+  }
+}
+
+/* online/offline UX: a slim banner + a body flag so the user knows WHY a fresh
+   pull or an unfilled article won't load, and an auto re-cache when we reconnect. */
+function setOnlineState(on) {
+  document.body.classList.toggle("is-offline", !on);
+  const b = $("offline-banner");
+  if (b) b.hidden = on;
+  if (on) preloadForOffline(false);
 }
 
 /* The three deep-data registries the pipeline maintains (steps 10b–10d). Each is
@@ -4840,7 +4908,9 @@ async function openReaderRoute(date, id) {
     body.innerHTML = "";
     const p = document.createElement("p");
     p.className = "reader-fallback";
-    p.textContent = (story.summary || "") + " Full text wasn't available for this story — use the link below to read it at the source.";
+    p.textContent = (story.summary || "") + (navigator.onLine
+      ? " Full text wasn't available for this story — use the link below to read it at the source."
+      : " Full text isn't saved for offline yet — it'll load once you're back online.");
     body.appendChild(p);
   }
   linkifyElement(body);
@@ -7445,6 +7515,33 @@ async function renderStatus() {
     for (const s of blocked) statusRow(contentCard, s.id, "reads at source (unfetchable)");
   }
   wrap.appendChild(contentCard);
+
+  // Offline reading — what's saved for the train, and a one-tap force-save
+  const offCard = statusCard("Offline reading");
+  const off = state.offlineReady;
+  statusRow(offCard, "Connection", navigator.onLine ? "online" : "offline", navigator.onLine ? "ok" : "warn");
+  if (off?.dates?.length) {
+    statusRow(offCard, "Saved for offline", `${off.dates.length} recent day${off.dates.length === 1 ? "" : "s"}`, "ok");
+    statusRow(offCard, "Last saved", off.at
+      ? new Date(off.at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—");
+  } else {
+    statusRow(offCard, "Saved for offline", "nothing yet", "warn");
+  }
+  const offNote = document.createElement("p");
+  offNote.className = "status-note";
+  offNote.textContent = "The last few days' article text is saved automatically so it reads on the train. Save now before you lose signal — stories still waiting on the fill loop (above) can't be saved until their text lands.";
+  offCard.appendChild(offNote);
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "status-action";
+  saveBtn.textContent = "Save latest for offline";
+  saveBtn.addEventListener("click", async () => {
+    saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+    await preloadForOffline(true);
+    saveBtn.disabled = false; saveBtn.textContent = "Save latest for offline";
+    route();
+  });
+  offCard.appendChild(saveBtn);
+  wrap.appendChild(offCard);
 
   const hbCard = statusCard("Content heartbeat");
   const hbAge = ageMin(hb?.lastRun);

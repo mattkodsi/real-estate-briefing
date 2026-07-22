@@ -8,16 +8,20 @@
   <title>Real Estate Briefing</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🗞️</text></svg>">
   <!-- installable PWA: manifest + iOS home-screen chrome; sw.js caches the app shell for offline -->
-  <link rel="manifest" href="manifest.webmanifest?v=92">
+  <link rel="manifest" href="manifest.webmanifest?v=93">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Briefing">
   <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css">
   <!-- bump ?v= on every deploy so cached pages can never pair old code with new data -->
-  <link rel="stylesheet" href="css/style.css?v=92">
+  <link rel="stylesheet" href="css/style.css?v=93">
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js" defer></script>
 </head>
 <body>
+
+  <!-- slim connectivity banner: shown while offline so the reader knows why a
+       fresh pull or an unfilled article won't load (saved days still read) -->
+  <div id="offline-banner" class="offline-banner" hidden>Offline — showing saved briefings</div>
 
   <!-- reader profiles overlay — the picker IS the lock (rendered by JS;
        gates first launch, and the masthead monogram re-locks to it) -->
@@ -231,7 +235,7 @@
 
   <div id="toast" role="status"></div>
 
-  <script src="js/app.js?v=92"></script>
+  <script src="js/app.js?v=93"></script>
   <script>
     if ('serviceWorker' in navigator) {
       // Auto-update: reload once the instant a new service worker takes control,
@@ -248,7 +252,7 @@
         });
       }
       window.addEventListener('load', function () {
-        navigator.serviceWorker.register('sw.js?v=92').then(function (reg) {
+        navigator.serviceWorker.register('sw.js?v=93').then(function (reg) {
           reg.update(); // check for a newer version right now…
           document.addEventListener('visibilitychange', function () {
             // …and every time the app is reopened or refocused
