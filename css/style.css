@@ -2952,9 +2952,10 @@ button.cal-open:active { background: var(--rule); }
 .metric-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .metric-name { font-size: 11.5px; font-weight: 600; color: var(--ink-2); line-height: 1.3; }
 .metric-val { font-family: var(--serif); font-size: 19px; font-weight: 700; color: var(--ink); white-space: nowrap; }
-.metric-delta.up { color: #d23f31; font-size: 12px; }
-.metric-delta.down { color: #1e8e3e; font-size: 12px; }
-@media (prefers-color-scheme: dark) { .metric-delta.up { color: #ff7b6e; } .metric-delta.down { color: #5bd07f; } }
+/* Direction-only, neutral tone: the arrow shows whether the latest print ticked
+   up or down vs the prior one — NOT good/bad (that varies per metric: rising rent
+   is good, rising vacancy is bad), so no red/green judgment is implied. */
+.metric-delta.up, .metric-delta.down { color: var(--ink-3); font-size: 12px; }
 .sparkline { display: block; width: 100%; height: 30px; margin: 8px 0 6px; }
 .metric-meta { font-size: 10.5px; color: var(--ink-3); line-height: 1.45; }
 

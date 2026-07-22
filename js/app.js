@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v102";
+const APP_VERSION = "v103";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5373,11 +5373,17 @@ function sheetFlingTo(hash) {
   const c = $("sheet-card"), sheet = $("sheet");
   peekFling = null; sheetDragY = null; sheetDy = 0;
   sheetFlinging = true;                 // tell route() to keep its hands off the sheet
-  c.style.transition = "transform .2s cubic-bezier(.32,.72,.24,1), opacity .18s ease";
-  c.style.transform = "translateY(-130px)"; // always UP from wherever the drag left it, then fade
-  c.style.opacity = "0";
-  sheet.classList.add("flinging");     // fast scrim fade (CSS)
-  location.hash = hash;                 // destination renders under the fade
+  // Render the destination FIRST (behind the still peek — its heavy DOM build
+  // happens while the card is motionless, so it can't jank the animation), then
+  // on the next frames LIFT the card up + fade the scrim to REVEAL the page: one
+  // continuous "open", not a hard swap.
+  location.hash = hash;
+  sheet.classList.add("flinging");     // scrim fades to reveal the page beneath
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    c.style.transition = "transform .24s cubic-bezier(.32,.72,.24,1), opacity .22s ease";
+    c.style.transform = "translate3d(0, -140px, 0)"; // GPU-composited lift
+    c.style.opacity = "0";
+  }));
   setTimeout(() => {
     sheet.classList.remove("open", "flinging");
     sheet.hidden = true;
