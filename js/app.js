@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v99";
+const APP_VERSION = "v100";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -6924,21 +6924,24 @@ async function renderThreads() {
     wrap.appendChild(clist);
   }
 
-  // Individual threads that aren't already a branch of a canopy (those are
-  // reached through their trunk, so listing them again here would double up)
-  const branchSlugs = new Set(
-    campaigns.flatMap((c) => (c.branches || []).map((b) => b.thread).filter(Boolean)));
-  const loose = threads.filter((t) => !branchSlugs.has(t.slug)).sort(byRecency);
-  if (loose.length) {
+  // Every genuine tale, as a first-class card — a complete index. Tales that
+  // also live inside a saga appear there nested AND here, tagged "🌳 in {saga}"
+  // so the cross-reference reads as a pointer, not accidental duplication.
+  const sagaOfTale = new Map();
+  for (const c of campaigns)
+    for (const b of c.branches || [])
+      if (b.thread) sagaOfTale.set(b.thread, c.title || c.slug);
+  const allTales = threads.slice().sort(byRecency);
+  if (allTales.length) {
     if (campaigns.length) {
       const sub = document.createElement("p");
       sub.className = "thread-group-head";
-      sub.textContent = "🧵 Standalone tales — not part of a saga";
+      sub.textContent = "🧵 Tales — every storyline we're tracking";
       wrap.appendChild(sub);
     }
     const list = document.createElement("div");
     list.className = "arc-list";
-    for (const t of loose) list.appendChild(arcItem("thread", t, threadMap));
+    for (const t of allTales) list.appendChild(arcItem("thread", t, threadMap, sagaOfTale.get(t.slug)));
     wrap.appendChild(list);
   }
 }
@@ -6948,11 +6951,11 @@ async function renderThreads() {
    at a time. Hold-to-peek still works (the card keeps its data-peek). The panel is
    visually inset and capped with a rule so the end of one arc is clearly distinct
    from the start of the next. */
-function arcItem(kind, obj, threadMap) {
+function arcItem(kind, obj, threadMap, sagaTitle) {
   const item = document.createElement("div");
   item.className = "arc-item";
   const slug = obj.slug;
-  const card = kind === "canopy" ? canopyCard(obj, threadMap) : threadCard(obj);
+  const card = kind === "canopy" ? canopyCard(obj, threadMap) : threadCard(obj, sagaTitle);
   const panel = document.createElement("div");
   panel.className = "arc-expand";
   const inner = document.createElement("div");
@@ -7016,7 +7019,7 @@ function canopyCard(c, threadMap) {
   return btn;
 }
 
-function threadCard(t) {
+function threadCard(t, sagaTitle) {
   const btn = document.createElement("button");
   btn.className = "thread-card";
   btn.dataset.peek = "thread";
@@ -7038,6 +7041,12 @@ function threadCard(t) {
   meta.textContent = `${n} ${n === 1 ? "story" : "stories"}` +
     (t.lastSeen ? " · updated " + formatDate(t.lastSeen, { month: "short", day: "numeric" }) : "");
   btn.append(top, anchor, meta);
+  if (sagaTitle) {
+    const so = document.createElement("p");
+    so.className = "thread-saga-of";
+    so.textContent = "🌳 in " + sagaTitle;
+    btn.appendChild(so);
+  }
   return btn;
 }
 

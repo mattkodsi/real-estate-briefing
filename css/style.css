@@ -2557,6 +2557,7 @@ body.sheet-open, body.sheet-open * {
 .thread-anchor { color: var(--ink-2); font-size: 13px; line-height: 1.5; margin-top: 4px; }
 .thread-anchor.big { font-size: 14px; margin: 6px 0 18px; }
 .thread-meta { color: var(--ink-3); font-size: 11.5px; margin-top: 8px; }
+.thread-saga-of { color: var(--accent); font-size: 11.5px; font-weight: 600; margin-top: 6px; }
 
 /* Arcs index — rows that expand their timeline IN PLACE. An open row becomes one
    unified card (summary + inset body), so its end is clearly distinct from the
