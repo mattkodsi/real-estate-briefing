@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v98";
+const APP_VERSION = "v99";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1338,7 +1338,7 @@ function storyChips(story, date) {
   // arc chip: this story is a registered thread installment — tap through to the
   // timeline (stop the card's own click so it doesn't open the reader instead)
   if (story.thread) {
-    const arc = chip("🧵 Thread", "chip-arc");
+    const arc = chip("🧵 Tale", "chip-arc");
     arc.setAttribute("role", "link");
     arc.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -1351,7 +1351,7 @@ function storyChips(story, date) {
   if (state.campaigns) {
     const can = canopyForStory(state.campaigns, story, date);
     if (can) {
-      const cc = chip("🌳 " + (can.title || "Canopy"), "chip-canopy");
+      const cc = chip("🌳 " + (can.title || "Saga"), "chip-canopy");
       cc.setAttribute("role", "link");
       cc.addEventListener("click", (e) => {
         e.preventDefault(); e.stopPropagation();
@@ -2784,7 +2784,7 @@ function leagueRow({ p, count, volume }, rank) {
    and catalysts first, then the deal-level analytics that sharpen as coverage
    accumulates, then the macro backdrop. Each opens its own full board. */
 const DESK_CATALOG = [
-  { id: "threads", icon: "🧵", title: "Threads & Canopies", blurb: "Running storylines and the agendas that group them", hash: "#/threads" },
+  { id: "threads", icon: "🧵", title: "Sagas & Tales", blurb: "Running storylines and the sagas that group them", hash: "#/threads" },
   { id: "calendar", icon: "📅", title: "Calendar", blurb: "Upcoming catalysts — auctions, court dates, Fed decisions", hash: "#/calendar" },
   { id: "league", icon: "🏆", title: "League Tables", blurb: "Most-active buyers, lenders, developers and brokers" },
   { id: "comps", icon: "🏙️", title: "Comps", blurb: "$/sf and $/unit medians by market and asset class" },
@@ -2834,7 +2834,7 @@ async function renderTrends() {
       const active = threads.filter((t) => t.status !== "resolved").length;
       const canopies = campaigns.filter((c) => c.status !== "resolved").length;
       return canopies
-        ? `${canopies} ${canopies === 1 ? "canopy" : "canopies"} · ${active} active`
+        ? `${canopies} ${canopies === 1 ? "saga" : "sagas"} · ${active} active`
         : `${active} active`;
     })(),
   };
@@ -5046,7 +5046,7 @@ async function openReaderRoute(date, id) {
       const t = threads.find((x) => x.slug === story.thread);
       if (!t || !state.reader || state.reader.story.id !== story.id) return; // reader moved on
       const n = (t.entries || []).length;
-      threadEl.textContent = `🧵 Part of a thread — ${t.title} · ${n} ${n === 1 ? "story" : "stories"} →`;
+      threadEl.textContent = `🧵 Part of a tale — ${t.title} · ${n} ${n === 1 ? "story" : "stories"} →`;
       threadEl.href = `#/thread/${t.slug}`;
       threadEl.hidden = false;
     });
@@ -5060,7 +5060,7 @@ async function openReaderRoute(date, id) {
     const c = canopyForStory(campaigns, story, date);
     if (!c || !state.reader || state.reader.story.id !== story.id) return; // reader moved on
     const nb = (c.branches || []).length;
-    canopyEl.textContent = `🌳 Part of an agenda — ${c.title} · ${nb} ${nb === 1 ? "front" : "fronts"} →`;
+    canopyEl.textContent = `🌳 Part of a saga — ${c.title} · ${nb} ${nb === 1 ? "front" : "fronts"} →`;
     canopyEl.href = `#/campaign/${c.slug}`;
     canopyEl.hidden = false;
   });
@@ -5567,7 +5567,7 @@ async function openThreadPeek(slug, originRect) {
     const rl = document.createElement("span");
     rl.className = "sheet-role";
     const n = (t.entries || []).length;
-    rl.textContent = `${t.status === "resolved" ? "Resolved" : "Active"} thread · ${n} ${n === 1 ? "story" : "stories"}`;
+    rl.textContent = `${t.status === "resolved" ? "Resolved" : "Active"} tale · ${n} ${n === 1 ? "story" : "stories"}`;
     ht.append(nm, rl);
     head.appendChild(ht);
     const arrow = document.createElement("span");
@@ -6895,12 +6895,12 @@ function todayISO() {
 async function renderThreads() {
   const wrap = $("threads-content");
   wrap.innerHTML = "";
-  wrap.appendChild(pageHead("Arcs",
-    "Running storylines the briefing is tracking — the same property, deal, case, or company event, plus the agendas that group them. Tap any to open its timeline right here."));
+  wrap.appendChild(pageHead("Sagas",
+    "Running storylines the briefing is tracking. A tale is one exact storyline — the same property, deal, case, or company event; a saga groups several tales under one driver. Tap any to open its timeline right here."));
   const [threads, campaigns] = await Promise.all([getThreads(), getCampaigns()]);
   if (!threads.length && !campaigns.length) {
-    wrap.appendChild(emptyPanel("No arcs yet",
-      "When two or more stories share a concrete anchor — the same building, deal, case, or company event — they connect into a timeline here."));
+    wrap.appendChild(emptyPanel("Nothing tracked yet",
+      "When two or more stories share a concrete anchor — the same building, deal, case, or company event — they connect into a tale here, and related tales group into a saga."));
     return;
   }
 
@@ -6916,7 +6916,7 @@ async function renderThreads() {
   if (campaigns.length) {
     const sub = document.createElement("p");
     sub.className = "thread-group-head";
-    sub.textContent = "🌳 Canopies — several arcs under one agenda";
+    sub.textContent = "🌳 Sagas — several tales under one driver";
     wrap.appendChild(sub);
     const clist = document.createElement("div");
     clist.className = "arc-list";
@@ -6933,7 +6933,7 @@ async function renderThreads() {
     if (campaigns.length) {
       const sub = document.createElement("p");
       sub.className = "thread-group-head";
-      sub.textContent = "🧵 Standalone threads — arcs not part of a canopy";
+      sub.textContent = "🧵 Standalone tales — not part of a saga";
       wrap.appendChild(sub);
     }
     const list = document.createElement("div");
@@ -7044,10 +7044,10 @@ function threadCard(t) {
 async function renderThread(slug) {
   const wrap = $("threads-content");
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("All threads", "#/threads"));
+  wrap.appendChild(backLink("Sagas", "#/threads"));
   const threads = await getThreads();
   const t = threads.find((x) => x.slug === slug);
-  if (!t) { wrap.appendChild(emptyPanel("Thread not found", "This storyline isn't on record.")); return; }
+  if (!t) { wrap.appendChild(emptyPanel("Tale not found", "This storyline isn't on record.")); return; }
 
   const head = document.createElement("div");
   head.className = "thread-head";
@@ -7137,10 +7137,10 @@ function branchEntries(b, threadMap) {
 async function renderCampaign(slug) {
   const wrap = $("threads-content");
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("All threads", "#/threads"));
+  wrap.appendChild(backLink("Sagas", "#/threads"));
   const [campaigns, threads] = await Promise.all([getCampaigns(), getThreads()]);
   const c = campaigns.find((x) => x.slug === slug);
-  if (!c) { wrap.appendChild(emptyPanel("Canopy not found", "This agenda isn't on record.")); return; }
+  if (!c) { wrap.appendChild(emptyPanel("Saga not found", "This storyline isn't on record.")); return; }
   const threadMap = new Map(threads.map((t) => [t.slug, t]));
 
   // Head — the 🌳 mark, title, status
@@ -7226,7 +7226,7 @@ function canopyBodyEl(c, threadMap) {
       const link = document.createElement("a");
       link.className = "branch-threadlink";
       link.href = `#/thread/${b.thread}`;
-      link.textContent = "thread ›";
+      link.textContent = "tale ›";
       link.addEventListener("click", (e) => e.stopPropagation());
       bh.appendChild(link);
     }
@@ -7269,7 +7269,7 @@ function canopyBodyEl(c, threadMap) {
   if (related.length) {
     const rh = document.createElement("p");
     rh.className = "thread-group-head";
-    rh.textContent = "Related threads — adjacent, not part of the agenda";
+    rh.textContent = "Related tales — adjacent, not part of the saga";
     el.appendChild(rh);
     const rlist = document.createElement("div");
     rlist.className = "thread-list";
