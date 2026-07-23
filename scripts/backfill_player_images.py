@@ -39,9 +39,9 @@ KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y"
 H = {"apikey": KEY, "Authorization": f"Bearer {KEY}"}
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 briefing-bot"
 
-MIN_SIDE = 64       # reject anything whose short side is smaller (favicons, blanks)
+MIN_SIDE = 48       # reject anything whose short side is smaller (16/32px favicons)
 MAX_ASPECT = 1.6    # reject landscape/portrait (hero photos, wordmark banners)
-MIN_BYTES = 350     # a raster this small at 64px+ is blank/transparent, not a logo
+MIN_BYTES = 350     # a raster this small at 48px+ is blank/transparent, not a logo
 
 # Known-good domains for entities whose name doesn't map cleanly to a domain.
 COMPANY_DOMAINS = {

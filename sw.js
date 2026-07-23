@@ -1,16 +1,16 @@
 /* Service worker: offline-capable app shell + last-known data cache + web push.
    Bump VERSION (and the ?v= on assets in index.html) on every deploy so old
    caches are dropped and clients can never pair stale code with new data. */
-const VERSION = "v104";
+const VERSION = "v105";
 const SHELL = "shell-" + VERSION;
 const DATA = "data-" + VERSION;
 
 const SHELL_ASSETS = [
   "./",
   "./index.html",
-  "./css/style.css?v=104",
-  "./js/app.js?v=104",
-  "./manifest.webmanifest?v=104",
+  "./css/style.css?v=105",
+  "./js/app.js?v=105",
+  "./manifest.webmanifest?v=105",
   "./icon.svg",
   "https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css",
   "https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js",

@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v104";
+const APP_VERSION = "v105";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -798,7 +798,11 @@ async function getThreads() {
   if (state.threads) return state.threads;
   try {
     const rows = await sb("threads?select=slug,data");
-    state.threads = rows.map((r) => ({ slug: r.slug, ...(r.data || {}) }));
+    // a tale needs 2+ real installments; skip anything RETRACTED (a bad link the
+    // pipeline pulled) or thinner than that — threads are append-only in the DB,
+    // so retraction is a flag, not a delete
+    state.threads = rows.map((r) => ({ slug: r.slug, ...(r.data || {}) }))
+      .filter((t) => !t.retracted && (t.entries || []).length >= 2);
   } catch { state.threads = []; }
   return state.threads;
 }

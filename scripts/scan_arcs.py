@@ -114,6 +114,8 @@ if DAYS < 10_000:
 threads = _get("threads?select=slug,data")
 story_thread = {}
 for t in threads:
+    if t["data"].get("retracted"):
+        continue   # a retracted tale's stories should re-surface (as dupes), not read as linked
     for e in t["data"].get("entries", []):
         story_thread[e["id"]] = t["slug"]
 
@@ -156,68 +158,65 @@ for a, b in combinations(S, 2):
     tsim = SequenceMatcher(None, a["title"].lower(), b["title"].lower()).ratio()
     hi = max(jac, tsim)
     close = loc_close(a["loc"], b["loc"])
-    # a title match driven purely by the actor's own name repeating is not real
-    # corroboration, so require a firmer 0.45 similarity (or a $/address/pin match)
-    actor_corrob = shared_money or shared_addr or hi >= 0.45 or close
-    signals = []
-    tier_ = None  # "strong" (register) | "review" (judge)
-    # near-identical headline = a re-report; a MODERATE headline match must ALSO
-    # share an actor/address/$ or it's just boilerplate ("<place> home sells for $X")
-    if hi >= 0.8 or (hi >= 0.6 and (a["actors"] & b["actors"] or shared_addr or shared_money)):
-        signals.append(("headline", f"{hi:.2f} similar")); tier_ = "strong"
-    if shared_addr:
-        signals.append(("address", ", ".join(sorted(shared_addr)))); tier_ = "strong"
-    if len(mid) >= 2:
-        signals.append(("2+ actors", ", ".join(name_of[s] for s in mid))); tier_ = "strong"
-    if rare:
-        label = ("rare actor", ", ".join(name_of[s] for s in rare))
-        if actor_corrob:
-            signals.append(label); tier_ = "strong"
-        elif tier_ is None:
-            signals.append(label); tier_ = "review"   # same actor, unrelated-looking deals → routine judges
-        else:
-            signals.append(label)
-    if not signals and len(mid) == 1 and actor_corrob:
-        corr = "$" + sorted(shared_money)[0] if shared_money else ("same pin" if close else f"title {hi:.2f}")
-        signals.append((f"actor+{corr}", name_of[mid[0]])); tier_ = "review"
-    if not signals:
-        continue
-    extra = []
-    if shared_money: extra.append("$" + ",".join(sorted(shared_money)))
-    if close: extra.append("same pin")
+    # concrete anchor the two stories share (for BOTH the dupe and tale buckets)
+    anchor = []
+    if shared_addr: anchor.append(("address", ", ".join(sorted(shared_addr))))
+    if rare: anchor.append(("rare actor", ", ".join(name_of[s] for s in rare)))
+    elif len(mid) >= 2: anchor.append(("2+ actors", ", ".join(name_of[s] for s in mid)))
+    # a single mid-frequency actor alone is almost always unrelated deals — surface
+    # only when a $ figure or shared pin corroborates it
+    elif len(mid) == 1 and (shared_money or close): anchor.append(("actor+corrob", name_of[mid[0]]))
+    extra = (["$" + ",".join(sorted(shared_money))] if shared_money else []) + (["same pin"] if close else [])
     same = story_thread.get(a["id"]) and story_thread.get(a["id"]) == story_thread.get(b["id"])
-    strength = ((4 if shared_addr else 0) + (2 if hi >= 0.8 else 0)
-                + (3 if rare and actor_corrob else 0) + (2 if len(mid) >= 2 else 0) + hi)
-    cands.append({"a": a, "b": b, "signals": signals, "extra": extra, "linked": same, "tier": tier_,
-                  "existing": story_thread.get(a["id"]) or story_thread.get(b["id"]),
-                  "strength": strength})
+    existing = story_thread.get(a["id"]) or story_thread.get(b["id"])
+    rec = {"a": a, "b": b, "anchor": anchor, "extra": extra, "hi": hi,
+           "linked": same, "existing": existing}
 
-cands.sort(key=lambda c: -c["strength"])
-strong = [c for c in cands if not c["linked"] and c["tier"] == "strong"]
-review = [c for c in cands if not c["linked"] and c["tier"] == "review"]
+    # A) DUPLICATE — a near-identical headline means it's the SAME story re-reported
+    # (or the same event from a 2nd outlet). This is NOT a tale: a tale needs
+    # DIFFERENT developments. It must be MERGED/deduped, never threaded. Require
+    # some shared specificity so boilerplate templates aren't flagged.
+    if hi >= 0.9 or (hi >= 0.72 and (shared or shared_addr or shared_money)):
+        rec["kind"] = "dupe"; cands.append(rec); continue
+    # B) TALE CANDIDATE — a shared concrete anchor with a DIFFERENT headline (a
+    # possible new development). The routine must still judge: distinct
+    # developments = tale; same actor + unrelated deals = skip.
+    if anchor and hi < 0.72:
+        rec["kind"] = "tale"
+        rec["strong"] = bool(shared_addr) or len(mid) >= 2 or (bool(rare) and (shared_money or shared_addr))
+        cands.append(rec)
+
+dupes = [c for c in cands if c["kind"] == "dupe" and not c["linked"]]
+strong = [c for c in cands if c["kind"] == "tale" and not c["linked"] and c["strong"]]
+review = [c for c in cands if c["kind"] == "tale" and not c["linked"] and not c["strong"]]
 linked = [c for c in cands if c["linked"]]
+dupes.sort(key=lambda c: -c["hi"])
 
 def show(c):
-    a, b = c["a"], c["b"]
-    sig = "; ".join(f"{k}: {v}" for k, v in c["signals"])
-    if c["extra"]:
-        sig += "  (+ " + ", ".join(c["extra"]) + ")"
+    sig = "; ".join(f"{k}: {v}" for k, v in c["anchor"]) or "—"
+    if "hi" in c and c["kind"] == "dupe": sig = f"headline {c['hi']:.2f} identical; " + sig
+    if c["extra"]: sig += "  (+ " + ", ".join(c["extra"]) + ")"
     note = f"   ↳ one side already in '{c['existing']}'" if c["existing"] else ""
     print(f"● {sig}{note}")
-    print(f"    {a['date']} · {a['id']}  \"{a['title'][:72]}\"")
-    print(f"    {b['date']} · {b['id']}  \"{b['title'][:72]}\"")
+    print(f"    {c['a']['date']} · {c['a']['id']}  \"{c['a']['title'][:72]}\"")
+    print(f"    {c['b']['date']} · {c['b']['id']}  \"{c['b']['title'][:72]}\"")
 
 # ---- report ----
 print(f"scan_arcs — window: last {'ALL' if DAYS >= 10000 else DAYS} days "
       f"({len(S)} stories, {len(threads)} registered tales, {len(PAT)} actor patterns)\n")
-print(f"■ HIGH-CONFIDENCE candidate tales — register unless clearly wrong ({len(strong)}):\n")
+print(f"⚠ LIKELY DUPLICATES — same story re-reported / same event from a 2nd outlet.")
+print(f"  MERGE the coverage into one story; do NOT thread these. ({len(dupes)}):\n")
+for c in dupes:
+    show(c)
+print(f"\n■ TALE CANDIDATES — shared anchor + DIFFERENT headline (a possible NEW development).")
+print(f"  Register ONLY if it's a genuine progression, not a restatement. ({len(strong)}):\n")
 for c in strong:
     show(c)
-print(f"\n□ REVIEW — same actor, possibly UNRELATED deals (the routine judges) ({len(review)}):\n")
+print(f"\n□ REVIEW — same actor, likely UNRELATED deals (usually NOT a tale) ({len(review)}):\n")
 for c in review:
     show(c)
-print(f"\n✓ ALREADY LINKED (correctly caught, no action): {len(linked)} pair(s)")
+print(f"\n✓ ALREADY LINKED (registered tales, no action): {len(linked)} pair(s)")
 for c in linked[:50]:
     print(f"    [{c['existing']}] {c['a']['id']}  +  {c['b']['id']}")
-if not strong and not review:
-    print("\nNo unlinked same-anchor pairs in the window — tale coverage is current.")
+if not dupes and not strong and not review:
+    print("\nNothing surfaced in the window.")
