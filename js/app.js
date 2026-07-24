@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v108";
+const APP_VERSION = "v109";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -713,12 +713,27 @@ async function init() {
   });
 }
 
+// Email click-tracking wrappers (Bisnow Iterable / beehiiv) only resolve inside
+// the email that sent them — clicked here they 404 ("Can't find the project that
+// sent this link"). Defense-in-depth: null any that slip into the data so the app
+// never renders a broken "Read at source" (the routine + fetch_article already
+// reject these upstream).
+const DEAD_WRAPPER_RE = /^https?:\/\/(links\.bisnow\.com|link\.mail\.beehiiv\.com)\b/i;
+const isDeadWrapperUrl = (u) => !!u && DEAD_WRAPPER_RE.test(u);
+function sanitizeDayUrls(day) {
+  for (const s of day?.stories || []) {
+    if (isDeadWrapperUrl(s.url)) { s.url = null; s.sourceBlocked = false; }
+    for (const c of s.coverage || []) if (isDeadWrapperUrl(c.url)) c.url = null;
+  }
+  return day;
+}
+
 async function getDay(date) {
   if (!date) return null;
   if (state.days.has(date)) return state.days.get(date);
   try {
     const rows = await sb(`days?date=eq.${date}&select=data`);
-    const day = rows[0]?.data ?? null;
+    const day = rows[0]?.data ? sanitizeDayUrls(rows[0].data) : null;
     if (day) state.days.set(date, day);
     return day;
   } catch { return null; }

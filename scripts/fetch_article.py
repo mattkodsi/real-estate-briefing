@@ -323,7 +323,26 @@ def is_fabricated_bisnow_shortlink(url: str) -> bool:
     return bool(m) and not re.fullmatch(r"[0-9a-f]{8,}", m.group(1))
 
 
+def is_dead_tracking_wrapper(url: str) -> bool:
+    """Email click-tracking wrappers that only resolve inside the message that sent
+    them: Bisnow's Iterable `links.bisnow.com/u/click` and beehiiv's
+    `link.mail.beehiiv.com/ss/...`. Fetched (or clicked) anywhere else they die —
+    Bisnow's returns a hard 'Can't find the project that sent this link'. These must
+    NEVER be a story's url: Bisnow's real link is the `a-prod.bisnow.io/s/<hex>`
+    shortlink (in the DIGEST email's PLAINTEXT part, not its HTML), beehiiv's is the
+    plaintext markdown destination. Reject so the filler doesn't ship a broken
+    'Read at source'."""
+    try:
+        host = urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return False
+    return host in ("links.bisnow.com", "link.mail.beehiiv.com")
+
+
 def extract(url: str) -> dict:
+    if is_dead_tracking_wrapper(url):
+        return {"ok": False, "words": 0, "notFound": True, "deadWrapper": True,
+                "note": "dead email tracking wrapper (links.bisnow.com / beehiiv) — drop this url; use the a-prod.bisnow.io/s/<hex> shortlink from the email plaintext"}
     if is_fabricated_bisnow_shortlink(url):
         return {"ok": False, "words": 0, "notFound": True,
                 "note": "fabricated Bisnow short-link (non-hex slug) — not a real email link"}
