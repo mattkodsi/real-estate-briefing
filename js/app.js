@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v114";
+const APP_VERSION = "v115";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1100,6 +1100,7 @@ function showView(name) {
     a.classList.toggle("active", a.dataset.tab === tabName);
   }
   updateBottomIndicator(true);   // slide the liquid selector to the new tab
+  syncMastheadOffset();          // keep content clear of the fixed masthead
   $("date-nav").classList.toggle("off", name !== "briefing");
   // the masthead ticker is redundant on the Rates page itself
   $("rate-strip").classList.toggle("off", name === "rates");
@@ -5884,7 +5885,14 @@ function applyLook() {
   const look = pref("look", "updated") === "legacy" ? "legacy" : "updated";
   document.documentElement.setAttribute("data-look", look);
   ensureBottomNav();
-  requestAnimationFrame(() => updateBottomIndicator(false));
+  requestAnimationFrame(() => { updateBottomIndicator(false); syncMastheadOffset(); });
+}
+
+/* the updated look pins the masthead (position:fixed) so the feed slides under
+   its frosted blur — measure its height into --mast-h so content clears it. */
+function syncMastheadOffset() {
+  const m = document.querySelector(".masthead");
+  if (m) document.documentElement.style.setProperty("--mast-h", Math.round(m.getBoundingClientRect().height) + "px");
 }
 
 /* The updated look moves navigation to a floating bottom bar. Build it once from
@@ -5918,8 +5926,8 @@ function ensureBottomNav() {
     if (m) m.classList.add("active");
   }
   wireBottomNavDrag(nav);
-  window.addEventListener("resize", () => updateBottomIndicator(false));
-  requestAnimationFrame(() => updateBottomIndicator(false));
+  window.addEventListener("resize", () => { updateBottomIndicator(false); syncMastheadOffset(); });
+  requestAnimationFrame(() => { updateBottomIndicator(false); syncMastheadOffset(); });
 }
 
 function bnLinks(nav) { return [...nav.querySelectorAll("a")]; }
@@ -5936,29 +5944,31 @@ function updateBottomIndicator(animate = true) {
 
 function moveBnIndicator(ind, link, nav, animate) {
   if (!ind || !link) return;
-  const left = link.getBoundingClientRect().left - nav.getBoundingClientRect().left;
-  ind.style.width = link.offsetWidth + "px";
+  const nr = nav.getBoundingClientRect();
+  const dest = { left: link.getBoundingClientRect().left - nr.left, width: link.offsetWidth };
   if (!animate) {
     ind.style.transition = "none";
-    ind.style.transform = `translateX(${left}px)`;
-    void ind.offsetWidth;              // flush, then restore the spring for next time
+    ind.style.width = dest.width + "px";
+    ind.style.transform = `translateX(${dest.left}px)`;
+    void ind.offsetWidth;
     ind.style.transition = "";
-  } else {
-    ind.style.transition = "";
-    ind.style.transform = `translateX(${left}px)`;
-    bnStretch(ind);                    // liquid squash-and-stretch on the way over
+    return;
   }
-}
-
-function bnStretch(ind) {
-  const blob = ind.querySelector(".bn-blob");
-  if (!blob) return;
-  blob.style.transition = "none";
-  blob.style.transform = "scaleX(1.34)";
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    blob.style.transition = "";
-    blob.style.transform = "scaleX(1)";
-  }));
+  // liquid gloop: first stretch to bridge the gap to the target, then contract
+  // onto it. Reading the live rect (mid-transition too) makes fast drags flow.
+  const cr = ind.getBoundingClientRect();
+  const cur = { left: cr.left - nr.left, width: cr.width };
+  const bridgeLeft = Math.min(cur.left, dest.left);
+  const bridgeW = Math.max(cur.left + cur.width, dest.left + dest.width) - bridgeLeft;
+  ind.style.transition = "transform 0.2s cubic-bezier(.4,0,.3,1), width 0.2s cubic-bezier(.4,0,.3,1)";
+  ind.style.width = bridgeW + "px";
+  ind.style.transform = `translateX(${bridgeLeft}px)`;
+  clearTimeout(ind._gloop);
+  ind._gloop = setTimeout(() => {
+    ind.style.transition = "transform 0.28s cubic-bezier(.4,0,.2,1), width 0.28s cubic-bezier(.4,0,.2,1)";
+    ind.style.width = dest.width + "px";
+    ind.style.transform = `translateX(${dest.left}px)`;
+  }, 115);
 }
 
 function nearestBnIndex(nav, clientX) {

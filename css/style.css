@@ -3295,11 +3295,44 @@ button.cal-open:active { background: var(--rule); }
   --brief-bd: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
+/* ELEVATION PHILOSOPHY — dark lifts with a luminous highlight + a faint glow
+   ("glow-in-the-dark"); light lifts with a soft shadow. One rule, two honest
+   looks — shared by the cards and the nav blob. */
+:root[data-look="updated"] {
+  --card-rim: rgba(255, 255, 255, 0.85);
+  --card-bd: rgba(20, 26, 34, 0.05);
+  --blob-rim: rgba(255, 255, 255, 0.55);
+  --blob-elev: 0 3px 9px -3px rgba(28, 40, 64, 0.28);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-look="updated"] {
+    --card-rim: rgba(255, 255, 255, 0.07);
+    --card-bd: rgba(255, 255, 255, 0.06);
+    --blob-rim: rgba(255, 255, 255, 0.22);
+    --blob-elev: 0 0 12px -1px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+}
+:root[data-theme="dark"][data-look="updated"] {
+  --card-rim: rgba(255, 255, 255, 0.07);
+  --card-bd: rgba(255, 255, 255, 0.06);
+  --blob-rim: rgba(255, 255, 255, 0.22);
+  --blob-elev: 0 0 12px -1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+:root[data-theme="light"][data-look="updated"] {
+  --card-rim: rgba(255, 255, 255, 0.85);
+  --card-bd: rgba(20, 26, 34, 0.05);
+  --blob-rim: rgba(255, 255, 255, 0.55);
+  --blob-elev: 0 3px 9px -3px rgba(28, 40, 64, 0.28);
+}
+
 /* frosted sticky masthead — blurs the feed scrolling under it. No fixed
    descendants (the tabs move out to #bottom-nav), so backdrop-filter is safe. */
 :root[data-look="updated"] .masthead {
-  position: sticky;
+  position: fixed;                 /* fixed (not sticky) so blur + pinning coexist on iOS */
   top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(var(--page), 100vw);
   z-index: 60;
   background: var(--bar);
   -webkit-backdrop-filter: blur(24px) saturate(165%);
@@ -3307,6 +3340,9 @@ button.cal-open:active { background: var(--rule); }
   border-bottom: 1px solid var(--bar-bd);
   box-shadow: inset 0 1px 0 var(--bar-rim);
 }
+/* reserve the fixed masthead's height (measured in JS → --mast-h) so the feed
+   starts below it and slides UNDER it as you scroll */
+:root[data-look="updated"] main { padding-top: var(--mast-h, 96px); }
 /* nav moves to the bottom bar; the rate ticker stays up top */
 :root[data-look="updated"] .tabs { display: none; }
 
@@ -3319,11 +3355,14 @@ button.cal-open:active { background: var(--rule); }
   align-items: center;
   position: fixed;
   left: 50%;
-  bottom: calc(10px + env(safe-area-inset-bottom));
-  transform: translateX(-50%);
+  bottom: 0;
+  /* anchor purely by transform (composited) — the robust fix for iOS's
+     fixed-bottom vertical jump on page open */
+  transform: translate(-50%, calc(-10px - env(safe-area-inset-bottom)));
   width: min(var(--page), calc(100vw - 24px));
   z-index: 40;
-  will-change: transform;   /* own compositor layer → no reflow jump on page open */
+  will-change: transform;
+  backface-visibility: hidden;
   padding: 8px 8px;
   border-radius: 24px;
   background: var(--bar);
@@ -3368,8 +3407,9 @@ button.cal-open:active { background: var(--rule); }
   left: 0;
   width: 40px;
   transform: translateX(0);
-  transition: transform 0.42s cubic-bezier(0.34, 1.56, 0.4, 1);
-  will-change: transform;
+  /* smooth ease (no overshoot) — JS overrides inline during the gloop */
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), width 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, width;
   pointer-events: none;
 }
 .bn-blob {
@@ -3377,15 +3417,13 @@ button.cal-open:active { background: var(--rule); }
   width: 100%;
   height: 100%;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 32%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.30),
-              0 4px 14px -4px color-mix(in srgb, var(--accent) 50%, transparent);
-  transform-origin: center;
-  transition: transform 0.34s cubic-bezier(0.34, 1.56, 0.4, 1);
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  /* faint glow in dark, soft shadow in light — the elevation philosophy */
+  box-shadow: inset 0 1px 0 var(--blob-rim), var(--blob-elev);
 }
 @media (prefers-reduced-motion: reduce) {
-  .bn-indicator, .bn-blob { transition-duration: 0.001s; }
+  .bn-indicator { transition-duration: 0.001s; }
 }
 
 /* keep the last cards clear of the floating bar */
@@ -3401,7 +3439,20 @@ button.cal-open:active { background: var(--rule); }
   border-radius: 14px;
   padding: 15px 16px;
   margin: 0;
-  box-shadow: var(--card-shadow);
+  box-shadow: inset 0 1px 0 var(--card-rim), var(--card-shadow);
+}
+
+/* every card gets a little dimension the same way the bars do — a luminous top
+   rim in dark, a soft shadow in light. Subtle, throughout the app. */
+:root[data-look="updated"] .story,
+:root[data-look="updated"] .catchup,
+:root[data-look="updated"] .status-card,
+:root[data-look="updated"] .player-card,
+:root[data-look="updated"] .day-card,
+:root[data-look="updated"] .desk-card,
+:root[data-look="updated"] .reader-next-card {
+  border: 1px solid var(--card-bd);
+  box-shadow: inset 0 1px 0 var(--card-rim), var(--card-shadow);
 }
 :root[data-look="updated"] .lede-kicker { color: var(--accent); }
 :root[data-look="updated"] #key-points li:last-child { border-bottom: none; padding-bottom: 1px; }
