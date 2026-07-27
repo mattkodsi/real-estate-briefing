@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v111";
+const APP_VERSION = "v112";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1096,7 +1096,7 @@ function showView(name) {
   for (const v of document.querySelectorAll(".view")) v.hidden = true;
   $(`view-${name}`).hidden = false;
   const tabName = VIEW_TO_TAB[name] || name;
-  for (const a of document.querySelectorAll(".tabs a")) {
+  for (const a of document.querySelectorAll(".tabs a, #bottom-nav a")) {
     a.classList.toggle("active", a.dataset.tab === tabName);
   }
   $("date-nav").classList.toggle("off", name !== "briefing");
@@ -5817,7 +5817,7 @@ async function activateProfile(slug, meta) {
     Object.assign(profile, { slug: "guest", name: "Guest", color: null, guest: true, data: {}, dirty: new Set() });
     try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
     paintAvatar();
-    applySkin();
+    applyLook();
     return;
   }
   meta = meta || FOUNDERS.find((f) => f.slug === slug) || null;
@@ -5859,7 +5859,7 @@ async function activateProfile(slug, meta) {
   } catch { /* ignore */ }
   schedulePrefsFlush(true); // ensure the row exists (and carries any migration)
   paintAvatar();
-  applySkin();
+  applyLook();
 }
 
 function pref(key, fallback) {
@@ -5875,13 +5875,41 @@ function setPref(key, value) {
   schedulePrefsFlush();
 }
 
-/* Liquid glass skin — an opt-in appearance toggled on the status page (reached by
-   tapping the CRE Briefing header). Sets data-skin on <html>; the stylesheet's
-   [data-skin="glass"] rules do the rest. Persists per profile like any other
-   pref; default is the original flat look. */
-function applySkin() {
-  const glass = pref("skin", "flat") === "glass";
-  document.documentElement.setAttribute("data-skin", glass ? "glass" : "flat");
+/* Appearance — the refreshed look (default) vs the legacy look, toggled on the
+   status page (reached by tapping the CRE Briefing header). Sets data-look on
+   <html>; the stylesheet's [data-look="updated"] rules do the rest. Persists per
+   profile like any other pref; default is the updated look. */
+function applyLook() {
+  const look = pref("look", "updated") === "legacy" ? "legacy" : "updated";
+  document.documentElement.setAttribute("data-look", look);
+  ensureBottomNav();
+}
+
+/* The updated look moves navigation to a floating bottom bar. Build it once from
+   the top tabs (same hrefs/labels/data-tab), appended to <body> so it never sits
+   inside a backdrop-filtered ancestor — which would trap its fixed positioning.
+   CSS shows/hides the top tabs vs this bar per look; showView() keeps both in
+   sync for the active state. */
+function ensureBottomNav() {
+  if (document.getElementById("bottom-nav")) return;
+  const src = document.querySelector(".tabs");
+  if (!src) return;
+  const nav = document.createElement("nav");
+  nav.id = "bottom-nav";
+  nav.setAttribute("aria-label", "Views");
+  for (const a of src.querySelectorAll("a")) {
+    const link = document.createElement("a");
+    link.href = a.getAttribute("href");
+    if (a.dataset.tab) link.dataset.tab = a.dataset.tab;
+    link.textContent = a.textContent;
+    nav.appendChild(link);
+  }
+  document.body.appendChild(nav);
+  const active = src.querySelector("a.active");
+  if (active?.dataset.tab) {
+    const m = nav.querySelector(`a[data-tab="${active.dataset.tab}"]`);
+    if (m) m.classList.add("active");
+  }
 }
 
 /* Write-through sync: only keys this session actually changed overwrite the
@@ -7727,13 +7755,31 @@ async function renderStatus() {
   head.innerHTML = `<h2>System status</h2><p>The pipeline behind the briefing — content filling, sources, and sessions.</p>`;
   wrap.appendChild(head);
 
-  // Appearance — liquid glass vs the original flat look (per reader, persisted)
-  const skinCard = statusCard("Appearance");
-  alertToggleRow(skinCard, "Liquid glass",
-    "Frosted, translucent cards over a soft glow. Off keeps the original flat look.",
-    pref("skin", "flat") === "glass",
-    (on) => { setPref("skin", on ? "glass" : "flat"); applySkin(); });
-  wrap.appendChild(skinCard);
+  // Appearance — the refreshed look (default) vs the legacy look (per reader)
+  const lookCard = statusCard("Appearance");
+  const seg = document.createElement("div");
+  seg.className = "seg-toggle";
+  seg.setAttribute("role", "group");
+  seg.setAttribute("aria-label", "App appearance");
+  const currentLook = pref("look", "updated") === "legacy" ? "legacy" : "updated";
+  for (const [val, label] of [["updated", "Updated look"], ["legacy", "Legacy"]]) {
+    const b = document.createElement("button");
+    b.className = "seg-opt" + (currentLook === val ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      setPref("look", val);
+      applyLook();
+      for (const x of seg.querySelectorAll(".seg-opt")) x.classList.remove("on");
+      b.classList.add("on");
+    });
+    seg.appendChild(b);
+  }
+  lookCard.appendChild(seg);
+  const lookNote = document.createElement("p");
+  lookNote.className = "status-note";
+  lookNote.textContent = "Updated moves the menu to a frosted bottom bar and gives the day's brief its own cards. Legacy is the original top-tab layout.";
+  lookCard.appendChild(lookNote);
+  wrap.appendChild(lookCard);
 
   const latest = state.dates[state.dates.length - 1];
   const [day, hb] = await Promise.all([getDay(latest), readHeartbeatRow()]);

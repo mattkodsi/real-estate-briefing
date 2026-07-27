@@ -3256,106 +3256,143 @@ button.cal-open:active { background: var(--rule); }
 }
 
 /* ============================================================================
-   LIQUID GLASS skin — opt-in via the Appearance toggle on the status page
-   (tap the CRE Briefing header → Appearance → Liquid glass). Scoped to
-   :root[data-skin="glass"], so the flat default is untouched. Real frosted
-   MATERIAL: a bright translucent layer that lifts off a CLEAN deep ground, lit
-   with a crisp specular top-left and a bright top rim. No colored light painted
-   on the background — that read as smears; the frost + rim carry the look.
+   APPEARANCE — the "Updated" look (the default), toggled against "Legacy" on the
+   status page (tap the CRE Briefing header → Appearance). Scoped to
+   :root[data-look="updated"]; Legacy is the base CSS above, untouched. The
+   refresh: a frosted sticky masthead + a floating frosted bottom nav (glass on
+   the CHROME, where the feed scrolls under it), the day's brief in its own
+   accent-tinted cards, and clean neutral story cards.
    ========================================================================== */
 
-/* --- glass tokens (light defaults; dark overrides below) --- */
-:root[data-skin="glass"] {
-  --glass-fill: rgba(255, 255, 255, 0.58);
-  --glass-spec: rgba(255, 255, 255, 0.85);   /* specular corner + top rim */
-  --glass-border: rgba(255, 255, 255, 0.75);
-  --glass-shadow: 0 14px 32px -18px rgba(28, 40, 64, 0.40);
-  --glass-blur: 22px;
-  --glass-sat: 150%;
-  --glass-bright: 1.02;
-  --glass-base: #e6eaf0;
-  --glass-bar: rgba(255, 255, 255, 0.60);
+:root[data-look="updated"] {
+  --bar: rgba(255, 255, 255, 0.68);
+  --bar-bd: rgba(20, 26, 34, 0.10);
+  --bar-rim: rgba(255, 255, 255, 0.9);
+  --brief-tint: color-mix(in srgb, var(--accent) 8%, var(--box));
+  --brief-bd: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 @media (prefers-color-scheme: dark) {
-  :root[data-skin="glass"] {
-    --glass-fill: rgba(255, 255, 255, 0.07);  /* a light frost lifting the dark */
-    --glass-spec: rgba(255, 255, 255, 0.34);
-    --glass-border: rgba(255, 255, 255, 0.13);
-    --glass-shadow: 0 16px 34px -18px rgba(0, 0, 0, 0.70);
-    --glass-bright: 1.08;
-    --glass-base: #090c11;
-    --glass-bar: rgba(18, 22, 30, 0.55);
+  :root[data-look="updated"] {
+    --bar: rgba(14, 18, 26, 0.62);
+    --bar-bd: rgba(255, 255, 255, 0.12);
+    --bar-rim: rgba(255, 255, 255, 0.14);
+    --brief-tint: color-mix(in srgb, var(--accent) 15%, var(--box));
+    --brief-bd: color-mix(in srgb, var(--accent) 32%, transparent);
   }
 }
-/* explicit theme toggles win over the media query, in both directions */
-:root[data-theme="dark"][data-skin="glass"] {
-  --glass-fill: rgba(255, 255, 255, 0.07);
-  --glass-spec: rgba(255, 255, 255, 0.34);
-  --glass-border: rgba(255, 255, 255, 0.13);
-  --glass-shadow: 0 16px 34px -18px rgba(0, 0, 0, 0.70);
-  --glass-bright: 1.08;
-  --glass-base: #090c11;
-  --glass-bar: rgba(18, 22, 30, 0.55);
+:root[data-theme="dark"][data-look="updated"] {
+  --bar: rgba(14, 18, 26, 0.62);
+  --bar-bd: rgba(255, 255, 255, 0.12);
+  --bar-rim: rgba(255, 255, 255, 0.14);
+  --brief-tint: color-mix(in srgb, var(--accent) 15%, var(--box));
+  --brief-bd: color-mix(in srgb, var(--accent) 32%, transparent);
 }
-:root[data-theme="light"][data-skin="glass"] {
-  --glass-fill: rgba(255, 255, 255, 0.58);
-  --glass-spec: rgba(255, 255, 255, 0.85);
-  --glass-border: rgba(255, 255, 255, 0.75);
-  --glass-shadow: 0 14px 32px -18px rgba(28, 40, 64, 0.40);
-  --glass-bright: 1.02;
-  --glass-base: #e6eaf0;
-  --glass-bar: rgba(255, 255, 255, 0.60);
+:root[data-theme="light"][data-look="updated"] {
+  --bar: rgba(255, 255, 255, 0.68);
+  --bar-bd: rgba(20, 26, 34, 0.10);
+  --bar-rim: rgba(255, 255, 255, 0.9);
+  --brief-tint: color-mix(in srgb, var(--accent) 8%, var(--box));
+  --brief-bd: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 
-/* clean deep ground — no glow, no smears */
-:root[data-skin="glass"] body { background: var(--glass-base); }
-
-/* frosted masthead — blurs whatever passes under it */
-:root[data-skin="glass"] .masthead {
-  background: var(--glass-bar);
+/* frosted sticky masthead — blurs the feed scrolling under it. No fixed
+   descendants (the tabs move out to #bottom-nav), so backdrop-filter is safe. */
+:root[data-look="updated"] .masthead {
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  background: var(--bar);
   -webkit-backdrop-filter: blur(24px) saturate(165%);
   backdrop-filter: blur(24px) saturate(165%);
-  border-bottom: 1px solid var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-spec);
+  border-bottom: 1px solid var(--bar-bd);
+  box-shadow: inset 0 1px 0 var(--bar-rim);
 }
+/* nav moves to the bottom bar; the rate ticker stays up top */
+:root[data-look="updated"] .tabs { display: none; }
 
-/* the glass surfaces: story cards, catch-up panel, status cards. The specular
-   sweep lives in the background (behind the text), so it never washes the copy. */
-:root[data-skin="glass"] .story,
-:root[data-skin="glass"] .catchup,
-:root[data-skin="glass"] .status-card {
-  background:
-    radial-gradient(130% 95% at 0% -16%, var(--glass-spec), transparent 46%),
-    var(--glass-fill);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
-  border: 1px solid var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-spec), inset 0 -1px 0 rgba(255, 255, 255, 0.04), var(--glass-shadow);
+/* the floating frosted bottom nav (built in JS, body-level so its fixed
+   position isn't trapped by the masthead's backdrop-filter) */
+#bottom-nav { display: none; }
+:root[data-look="updated"] #bottom-nav {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  z-index: 40;
+  max-width: var(--page);
+  margin: 0 auto;
+  padding: 11px 6px;
+  border-radius: 22px;
+  background: var(--bar);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--bar-bd);
+  box-shadow: inset 0 1px 0 var(--bar-rim), 0 16px 34px -16px rgba(0, 0, 0, 0.5);
 }
-:root[data-skin="glass"] .catchup { border-left: 3px solid var(--accent); }
-:root[data-skin="glass"] .catchup-head { border-bottom-color: var(--glass-border); }
-:root[data-skin="glass"] .catchup-row + .catchup-row { border-top-color: var(--glass-border); }
+:root[data-look="updated"] #bottom-nav a {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--ink-3);
+  padding: 4px 1px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+:root[data-look="updated"] #bottom-nav a.active { color: var(--accent); }
 
-/* frosted filter chips */
-:root[data-skin="glass"] .chip-filter {
-  background: var(--glass-fill);
-  -webkit-backdrop-filter: blur(14px) saturate(150%) brightness(var(--glass-bright));
-  backdrop-filter: blur(14px) saturate(150%) brightness(var(--glass-bright));
-  border-color: var(--glass-border);
-  box-shadow: inset 0 1px 0 var(--glass-spec);
-}
-:root[data-skin="glass"] .chip-filter.on {
-  background: var(--accent);
-  border-color: transparent;
-  color: #fff;
-}
+/* keep the last cards clear of the floating bar */
+:root[data-look="updated"] main { padding-bottom: 92px; }
 
-/* older phones with no backdrop-filter: fall back to a solid tint so glass mode
-   still reads as raised cards (no invisible transparent panels) */
+/* the day's brief gets its own accent-tinted cards — clearly NOT story cards
+   (blue-tinted = the synthesis; neutral = the individual stories) */
+:root[data-look="updated"] #lede-block { display: flex; flex-direction: column; gap: 12px; }
+:root[data-look="updated"] #overview-col,
+:root[data-look="updated"] #kp-col {
+  background: var(--brief-tint);
+  border: 1px solid var(--brief-bd);
+  border-radius: 14px;
+  padding: 15px 16px;
+  margin: 0;
+  box-shadow: var(--card-shadow);
+}
+:root[data-look="updated"] .lede-kicker { color: var(--accent); }
+:root[data-look="updated"] #key-points li:last-child { border-bottom: none; padding-bottom: 1px; }
+:root[data-look="updated"] #watch-row { margin-top: 12px; }
+
+/* segmented Legacy/Updated toggle on the status page */
+.seg-toggle {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 11px;
+  background: var(--rule);
+}
+.seg-opt {
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 16px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.seg-opt.on { background: var(--box); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
+
+/* older phones with no backdrop-filter: solid bars so nothing renders as an
+   invisible transparent panel */
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  :root[data-skin="glass"] .story,
-  :root[data-skin="glass"] .catchup,
-  :root[data-skin="glass"] .status-card,
-  :root[data-skin="glass"] .masthead,
-  :root[data-skin="glass"] .chip-filter { background: var(--box); }
+  :root[data-look="updated"] .masthead,
+  :root[data-look="updated"] #bottom-nav { background: var(--box); }
 }
