@@ -3348,21 +3348,27 @@ button.cal-open:active { background: var(--rule); }
 
 /* the floating frosted bottom nav (built in JS, body-level so its fixed
    position isn't trapped by the masthead's backdrop-filter) */
+/* one stable full-viewport fixed layer holds the bar — it never reflows, so the
+   bar doesn't jump when navigation scrolls the page (iOS fixed-bar bug) */
+#bn-layer { display: none; }
+:root[data-look="updated"] #bn-layer {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
 #bottom-nav { display: none; }
 :root[data-look="updated"] #bottom-nav {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  position: fixed;
+  position: absolute;          /* within the stable #bn-layer */
   left: 50%;
-  bottom: 0;
-  /* anchor purely by transform (composited) — the robust fix for iOS's
-     fixed-bottom vertical jump on page open */
-  transform: translate(-50%, calc(-10px - env(safe-area-inset-bottom)));
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
   width: min(var(--page), calc(100vw - 24px));
-  z-index: 40;
-  will-change: transform;
-  backface-visibility: hidden;
+  pointer-events: auto;
   padding: 8px 8px;
   border-radius: 24px;
   background: var(--bar);

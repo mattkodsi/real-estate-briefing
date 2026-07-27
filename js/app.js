@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v116";
+const APP_VERSION = "v117";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5919,7 +5919,12 @@ function ensureBottomNav() {
     link.textContent = a.textContent;
     nav.appendChild(link);
   }
-  document.body.appendChild(nav);
+  // host the bar in a full-viewport fixed LAYER (one stable fixed element that
+  // never reflows), so it doesn't jump when navigation calls window.scrollTo —
+  // the classic iOS fixed-bottom-bar bug
+  let layer = document.getElementById("bn-layer");
+  if (!layer) { layer = document.createElement("div"); layer.id = "bn-layer"; document.body.appendChild(layer); }
+  layer.appendChild(nav);
   const active = src.querySelector("a.active");
   if (active?.dataset.tab) {
     const m = nav.querySelector(`a[data-tab="${active.dataset.tab}"]`);
@@ -5948,20 +5953,56 @@ function updateBottomIndicator(animate = true) {
   settleBnTo(nav, i, animate);
 }
 
-/* park the blob on slot i. Smooth easing lives in CSS; JS just sets the target
-   (transition off = instant snap for first paint / resize). One clean move —
-   no per-slot animation stacking. */
-function settleBnTo(nav, i, animate) {
+/* The blob is a spring: its position LERPs toward a target and it stretches by
+   how far it has to travel each frame (the "pull"). One rAF loop drives it — so
+   dragging (target = finger) and settling (target = slot) share the same liquid
+   morph, and a lerp never overshoots, so it's smooth, never bouncy. */
+let bnRaf = 0;
+function bnRender(nav) {
+  const s = nav._bn;
   const ind = nav.querySelector(".bn-indicator");
   const blob = ind && ind.querySelector(".bn-blob");
-  if (!ind || !blob) return;
+  if (!s || !ind || !blob) return;
+  ind.style.transition = "none";
+  blob.style.transition = "none";
+  ind.style.width = s.w + "px";
+  ind.style.transform = `translateX(${s.pos}px)`;
+  blob.style.transform = `scaleX(${s.stretch})`;
+}
+function bnLoop(nav) {
+  if (bnRaf) cancelAnimationFrame(bnRaf);
+  const tick = () => {
+    const s = nav._bn;
+    if (!s) { bnRaf = 0; return; }
+    const dp = (s.tx - s.pos) * 0.2;      // ease position toward target (no overshoot)
+    const dw = (s.tw - s.w) * 0.25;
+    s.pos += dp;
+    s.w += dw;
+    s.stretch = Math.max(1, Math.min(1 + Math.abs(dp) / 7, 1.5)); // faster travel → more pull
+    bnRender(nav);
+    if (Math.abs(s.tx - s.pos) < 0.3 && Math.abs(s.tw - s.w) < 0.3 && s.stretch < 1.01) {
+      s.pos = s.tx; s.w = s.tw; s.stretch = 1;   // land clean
+      bnRender(nav);
+      bnRaf = 0;
+      return;
+    }
+    bnRaf = requestAnimationFrame(tick);
+  };
+  bnRaf = requestAnimationFrame(tick);
+}
+function settleBnTo(nav, i, animate) {
   const g = bnGeom(nav, i);
-  ind.style.transition = animate ? "" : "none";
-  blob.style.transition = animate ? "" : "none";
-  ind.style.width = g.width + "px";
-  ind.style.transform = `translateX(${g.left}px)`;
-  blob.style.transform = "scaleX(1)";
-  if (!animate) { void ind.offsetWidth; ind.style.transition = ""; blob.style.transition = ""; }
+  if (!nav._bn) nav._bn = { pos: g.left, w: g.width, tx: g.left, tw: g.width, stretch: 1 };
+  nav._bn.tx = g.left;
+  nav._bn.tw = g.width;
+  const reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!animate || reduce) {
+    if (bnRaf) { cancelAnimationFrame(bnRaf); bnRaf = 0; }
+    nav._bn.pos = g.left; nav._bn.w = g.width; nav._bn.stretch = 1;
+    bnRender(nav);
+  } else {
+    bnLoop(nav);
+  }
 }
 
 function nearestBnIndex(nav, clientX) {
@@ -5978,34 +6019,26 @@ function nearestBnIndex(nav, clientX) {
 /* drag the blob left↔right; it snaps slot-to-slot (stretching between) and
    navigates to wherever you let go. A plain tap is just a zero-distance drag. */
 function wireBottomNavDrag(nav) {
-  let dragging = false, moved = false, curIdx = -1, w = 0, lastX = 0;
-  const ind = nav.querySelector(".bn-indicator");
-  const blob = ind && ind.querySelector(".bn-blob");
+  let dragging = false, moved = false, curIdx = -1, dragW = 0;
   const setHot = (i) => bnLinks(nav).forEach((a, k) => a.classList.toggle("bn-hot", k === i));
 
   nav.addEventListener("pointerdown", (e) => {
-    if (!nav.offsetWidth || !ind) return;
+    if (!nav.offsetWidth) return;
     dragging = true; moved = false;
     curIdx = nearestBnIndex(nav, e.clientX);
-    w = bnGeom(nav, curIdx).width;
-    lastX = e.clientX - nav.getBoundingClientRect().left - w / 2;
+    dragW = bnGeom(nav, curIdx).width;
+    if (!nav._bn) { const g = bnGeom(nav, curIdx); nav._bn = { pos: g.left, w: g.width, tx: g.left, tw: g.width, stretch: 1 }; }
     try { nav.setPointerCapture(e.pointerId); } catch { /* ok */ }
   });
   nav.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     moved = true;
     const nr = nav.getBoundingClientRect();
-    let x = e.clientX - nr.left - w / 2;
-    x = Math.max(4, Math.min(x, nr.width - w - 4));           // clamp inside the bar
-    const stretch = Math.max(1, Math.min(1 + Math.abs(x - lastX) / 55, 1.3)); // fling → gloop
-    // follow the finger directly — no transition, so it's one buttery motion
-    // with zero per-slot animation to stack up and jitter
-    ind.style.transition = "none";
-    blob.style.transition = "none";
-    ind.style.width = w + "px";
-    ind.style.transform = `translateX(${x}px)`;
-    blob.style.transform = `scaleX(${stretch})`;
-    lastX = x;
+    let x = e.clientX - nr.left - dragW / 2;
+    x = Math.max(4, Math.min(x, nr.width - dragW - 4));   // clamp inside the bar
+    nav._bn.tx = x;                    // the spring chases the finger; its lag is the stretch
+    nav._bn.tw = dragW;
+    bnLoop(nav);
     const i = nearestBnIndex(nav, e.clientX);
     if (i !== curIdx) { curIdx = i; setHot(i); }
     e.preventDefault();
@@ -6014,8 +6047,8 @@ function wireBottomNavDrag(nav) {
     if (!dragging) return;
     dragging = false;
     bnLinks(nav).forEach((a) => a.classList.remove("bn-hot"));
-    if (moved) {                       // real drag → glide smoothly to the slot, then navigate
-      settleBnTo(nav, curIdx, true);   // CSS ease carries it; the stretch relaxes to 1
+    if (moved) {                       // real drag → spring settles onto the slot, then navigate
+      settleBnTo(nav, curIdx, true);
       const href = bnLinks(nav)[curIdx]?.getAttribute("href");
       if (href && href !== location.hash) location.hash = href.replace(/^#/, "");
     }
