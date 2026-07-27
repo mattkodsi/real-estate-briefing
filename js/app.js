@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v112";
+const APP_VERSION = "v113";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1099,6 +1099,7 @@ function showView(name) {
   for (const a of document.querySelectorAll(".tabs a, #bottom-nav a")) {
     a.classList.toggle("active", a.dataset.tab === tabName);
   }
+  updateBottomIndicator(true);   // slide the liquid selector to the new tab
   $("date-nav").classList.toggle("off", name !== "briefing");
   // the masthead ticker is redundant on the Rates page itself
   $("rate-strip").classList.toggle("off", name === "rates");
@@ -5883,6 +5884,7 @@ function applyLook() {
   const look = pref("look", "updated") === "legacy" ? "legacy" : "updated";
   document.documentElement.setAttribute("data-look", look);
   ensureBottomNav();
+  requestAnimationFrame(() => updateBottomIndicator(false));
 }
 
 /* The updated look moves navigation to a floating bottom bar. Build it once from
@@ -5897,6 +5899,11 @@ function ensureBottomNav() {
   const nav = document.createElement("nav");
   nav.id = "bottom-nav";
   nav.setAttribute("aria-label", "Views");
+  // the sliding "liquid" selector rides behind the labels
+  const ind = document.createElement("div");
+  ind.className = "bn-indicator";
+  ind.innerHTML = '<span class="bn-blob"></span>';
+  nav.appendChild(ind);
   for (const a of src.querySelectorAll("a")) {
     const link = document.createElement("a");
     link.href = a.getAttribute("href");
@@ -5910,6 +5917,100 @@ function ensureBottomNav() {
     const m = nav.querySelector(`a[data-tab="${active.dataset.tab}"]`);
     if (m) m.classList.add("active");
   }
+  wireBottomNavDrag(nav);
+  window.addEventListener("resize", () => updateBottomIndicator(false));
+  requestAnimationFrame(() => updateBottomIndicator(false));
+}
+
+function bnLinks(nav) { return [...nav.querySelectorAll("a")]; }
+
+/* park the blob under the active tab. animate=false snaps instantly (first
+   paint / resize / look-switch); animate=true springs + stretches (nav change). */
+function updateBottomIndicator(animate = true) {
+  const nav = document.getElementById("bottom-nav");
+  if (!nav || !nav.offsetParent) return;            // hidden in legacy → skip
+  const links = bnLinks(nav);
+  const i = Math.max(0, links.findIndex((a) => a.classList.contains("active")));
+  moveBnIndicator(nav.querySelector(".bn-indicator"), links[i], nav, animate);
+}
+
+function moveBnIndicator(ind, link, nav, animate) {
+  if (!ind || !link) return;
+  const left = link.getBoundingClientRect().left - nav.getBoundingClientRect().left;
+  ind.style.width = link.offsetWidth + "px";
+  if (!animate) {
+    ind.style.transition = "none";
+    ind.style.transform = `translateX(${left}px)`;
+    void ind.offsetWidth;              // flush, then restore the spring for next time
+    ind.style.transition = "";
+  } else {
+    ind.style.transition = "";
+    ind.style.transform = `translateX(${left}px)`;
+    bnStretch(ind);                    // liquid squash-and-stretch on the way over
+  }
+}
+
+function bnStretch(ind) {
+  const blob = ind.querySelector(".bn-blob");
+  if (!blob) return;
+  blob.style.transition = "none";
+  blob.style.transform = "scaleX(1.34)";
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    blob.style.transition = "";
+    blob.style.transform = "scaleX(1)";
+  }));
+}
+
+function nearestBnIndex(nav, clientX) {
+  const links = bnLinks(nav);
+  let idx = 0, best = Infinity;
+  links.forEach((a, i) => {
+    const r = a.getBoundingClientRect();
+    const d = Math.abs((r.left + r.width / 2) - clientX);
+    if (d < best) { best = d; idx = i; }
+  });
+  return idx;
+}
+
+/* drag the blob left↔right; it snaps slot-to-slot (stretching between) and
+   navigates to wherever you let go. A plain tap is just a zero-distance drag. */
+function wireBottomNavDrag(nav) {
+  let dragging = false, moved = false, curIdx = -1;
+  const ind = nav.querySelector(".bn-indicator");
+  const setHot = (i) => bnLinks(nav).forEach((a, k) => a.classList.toggle("bn-hot", k === i));
+
+  nav.addEventListener("pointerdown", (e) => {
+    if (!nav.offsetParent) return;
+    dragging = true; moved = false;
+    curIdx = nearestBnIndex(nav, e.clientX);
+    try { nav.setPointerCapture(e.pointerId); } catch { /* ok */ }
+  });
+  nav.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const i = nearestBnIndex(nav, e.clientX);
+    if (i !== curIdx) {
+      moved = true; curIdx = i; setHot(i);
+      moveBnIndicator(ind, bnLinks(nav)[i], nav, true);   // spring + stretch to the slot
+    }
+    e.preventDefault();   // only own the gesture once it's an actual drag
+  });
+  const end = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    bnLinks(nav).forEach((a) => a.classList.remove("bn-hot"));
+    if (moved) {   // a real drag → navigate to where we let go
+      const href = bnLinks(nav)[curIdx]?.getAttribute("href");
+      if (href && href !== location.hash) location.hash = href.replace(/^#/, "");
+      else updateBottomIndicator(true);
+    }
+    // a plain tap falls through to the native <a> click below (never dead-ends)
+    try { nav.releasePointerCapture(e.pointerId); } catch { /* ok */ }
+  };
+  nav.addEventListener("pointerup", end);
+  nav.addEventListener("pointercancel", end);
+  // suppress the native click ONLY after a drag (pointerup already navigated);
+  // taps keep their normal link navigation as a hard fallback
+  nav.addEventListener("click", (e) => { if (moved && e.target.closest("a")) { e.preventDefault(); moved = false; } });
 }
 
 /* Write-through sync: only keys this session actually changed overwrite the
