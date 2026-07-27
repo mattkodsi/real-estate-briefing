@@ -3254,3 +3254,142 @@ button.cal-open:active { background: var(--rule); }
 .player-card:active, .day-card:active, .reader-next-card:active, .rate-tile.clickable:active {
   box-shadow: var(--card-shadow-press);
 }
+
+/* ============================================================================
+   LIQUID GLASS skin — opt-in via the Appearance toggle on the status page
+   (tap the CRE Briefing header → Appearance → Liquid glass). Everything is
+   scoped to :root[data-skin="glass"], so the default flat look is untouched.
+   The look: a fixed field of colored light on the body, and translucent cards
+   that blur it (backdrop-filter), lit at the top edge with a faint sheen.
+   Glass only reads over color — hence the ambient glow behind it.
+   ========================================================================== */
+
+/* --- glass tokens (light defaults; dark overrides below) --- */
+:root[data-skin="glass"] {
+  --glass-fill: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.72);
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --glass-sheen: rgba(255, 255, 255, 0.60);
+  --glass-shadow: 0 14px 30px -18px rgba(28, 40, 64, 0.42);
+  --glass-blur: 18px;
+  --glass-sat: 145%;
+  --glass-base: #e9edf3;
+  --glass-glow:
+    radial-gradient(48% 32% at 15% 8%,  rgba(90, 140, 235, 0.26), transparent 68%),
+    radial-gradient(44% 30% at 90% 26%, rgba(70, 180, 150, 0.22), transparent 70%),
+    radial-gradient(52% 34% at 60% 82%, rgba(160, 130, 230, 0.22), transparent 72%),
+    radial-gradient(42% 26% at 32% 58%, rgba(240, 165, 150, 0.18), transparent 72%);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-skin="glass"] {
+    --glass-fill: rgba(24, 31, 44, 0.50);
+    --glass-border: rgba(255, 255, 255, 0.09);
+    --glass-hi: rgba(255, 255, 255, 0.15);
+    --glass-sheen: rgba(255, 255, 255, 0.10);
+    --glass-shadow: 0 16px 34px -20px rgba(0, 0, 0, 0.95);
+    --glass-base: #080b11;
+    --glass-glow:
+      radial-gradient(46% 30% at 16% 8%,  rgba(96, 140, 230, 0.30), transparent 70%),
+      radial-gradient(42% 30% at 90% 26%, rgba(56, 150, 120, 0.22), transparent 70%),
+      radial-gradient(52% 34% at 60% 82%, rgba(126, 104, 214, 0.20), transparent 72%),
+      radial-gradient(40% 26% at 30% 60%, rgba(212, 120, 110, 0.12), transparent 72%);
+  }
+}
+/* explicit theme toggles win over the media query, in both directions */
+:root[data-theme="dark"][data-skin="glass"] {
+  --glass-fill: rgba(24, 31, 44, 0.50);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-hi: rgba(255, 255, 255, 0.15);
+  --glass-sheen: rgba(255, 255, 255, 0.10);
+  --glass-shadow: 0 16px 34px -20px rgba(0, 0, 0, 0.95);
+  --glass-base: #080b11;
+  --glass-glow:
+    radial-gradient(46% 30% at 16% 8%,  rgba(96, 140, 230, 0.30), transparent 70%),
+    radial-gradient(42% 30% at 90% 26%, rgba(56, 150, 120, 0.22), transparent 70%),
+    radial-gradient(52% 34% at 60% 82%, rgba(126, 104, 214, 0.20), transparent 72%),
+    radial-gradient(40% 26% at 30% 60%, rgba(212, 120, 110, 0.12), transparent 72%);
+}
+:root[data-theme="light"][data-skin="glass"] {
+  --glass-fill: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.72);
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --glass-sheen: rgba(255, 255, 255, 0.60);
+  --glass-shadow: 0 14px 30px -18px rgba(28, 40, 64, 0.42);
+  --glass-base: #e9edf3;
+  --glass-glow:
+    radial-gradient(48% 32% at 15% 8%,  rgba(90, 140, 235, 0.26), transparent 68%),
+    radial-gradient(44% 30% at 90% 26%, rgba(70, 180, 150, 0.22), transparent 70%),
+    radial-gradient(52% 34% at 60% 82%, rgba(160, 130, 230, 0.22), transparent 72%),
+    radial-gradient(42% 26% at 32% 58%, rgba(240, 165, 150, 0.18), transparent 72%);
+}
+
+/* the colored light behind the glass — fixed so cards frost different parts as
+   the feed scrolls over it */
+:root[data-skin="glass"] body {
+  background-color: var(--glass-base);
+  background-image: var(--glass-glow);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+/* frosted masthead */
+:root[data-skin="glass"] .masthead {
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  backdrop-filter: blur(20px) saturate(150%);
+  border-bottom: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+
+/* the glass surfaces: story cards + the catch-up panel. The sheen lives in the
+   background (a light gradient over the translucent fill), so it never washes
+   over the text the way a ::before overlay would. */
+:root[data-skin="glass"] .story,
+:root[data-skin="glass"] .catchup {
+  background:
+    linear-gradient(142deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass-fill);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+}
+/* keep the catch-up panel's accent spine */
+:root[data-skin="glass"] .catchup { border-left: 3px solid var(--accent); }
+:root[data-skin="glass"] .catchup-head { border-bottom-color: var(--glass-border); }
+:root[data-skin="glass"] .catchup-row + .catchup-row { border-top-color: var(--glass-border); }
+
+/* frosted filter chips (the ones sitting on the page ground, not inside a card) */
+:root[data-skin="glass"] .chip-filter {
+  background: var(--glass-fill);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  backdrop-filter: blur(12px) saturate(140%);
+  border-color: var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi);
+}
+:root[data-skin="glass"] .chip-filter.on {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+/* status-page glass so the toggle's own surface matches what it turns on */
+:root[data-skin="glass"] .status-card {
+  background:
+    linear-gradient(142deg, var(--glass-sheen) 0%, transparent 46%),
+    var(--glass-fill);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-shadow);
+}
+
+/* older phones with no backdrop-filter: fall back to a solid tint so glass mode
+   still reads as raised cards (no invisible transparent panels) */
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  :root[data-skin="glass"] .story,
+  :root[data-skin="glass"] .catchup,
+  :root[data-skin="glass"] .status-card,
+  :root[data-skin="glass"] .masthead,
+  :root[data-skin="glass"] .chip-filter { background: var(--box); }
+}

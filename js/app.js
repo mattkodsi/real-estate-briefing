@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v109";
+const APP_VERSION = "v110";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5817,6 +5817,7 @@ async function activateProfile(slug, meta) {
     Object.assign(profile, { slug: "guest", name: "Guest", color: null, guest: true, data: {}, dirty: new Set() });
     try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
     paintAvatar();
+    applySkin();
     return;
   }
   meta = meta || FOUNDERS.find((f) => f.slug === slug) || null;
@@ -5858,6 +5859,7 @@ async function activateProfile(slug, meta) {
   } catch { /* ignore */ }
   schedulePrefsFlush(true); // ensure the row exists (and carries any migration)
   paintAvatar();
+  applySkin();
 }
 
 function pref(key, fallback) {
@@ -5871,6 +5873,15 @@ function setPref(key, value) {
   profile.dirty.add(key);
   try { localStorage.setItem(profileCacheKey(profile.slug), JSON.stringify(profile.data)); } catch { /* ignore */ }
   schedulePrefsFlush();
+}
+
+/* Liquid glass skin — an opt-in appearance toggled on the status page (reached by
+   tapping the CRE Briefing header). Sets data-skin on <html>; the stylesheet's
+   [data-skin="glass"] rules do the rest. Persists per profile like any other
+   pref; default is the original flat look. */
+function applySkin() {
+  const glass = pref("skin", "flat") === "glass";
+  document.documentElement.setAttribute("data-skin", glass ? "glass" : "flat");
 }
 
 /* Write-through sync: only keys this session actually changed overwrite the
@@ -7715,6 +7726,14 @@ async function renderStatus() {
   head.className = "status-head";
   head.innerHTML = `<h2>System status</h2><p>The pipeline behind the briefing — content filling, sources, and sessions.</p>`;
   wrap.appendChild(head);
+
+  // Appearance — liquid glass vs the original flat look (per reader, persisted)
+  const skinCard = statusCard("Appearance");
+  alertToggleRow(skinCard, "Liquid glass",
+    "Frosted, translucent cards over a soft glow. Off keeps the original flat look.",
+    pref("skin", "flat") === "glass",
+    (on) => { setPref("skin", on ? "glass" : "flat"); applySkin(); });
+  wrap.appendChild(skinCard);
 
   const latest = state.dates[state.dates.length - 1];
   const [day, hb] = await Promise.all([getDay(latest), readHeartbeatRow()]);
