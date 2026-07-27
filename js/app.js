@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v115";
+const APP_VERSION = "v116";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5934,41 +5934,34 @@ function bnLinks(nav) { return [...nav.querySelectorAll("a")]; }
 
 /* park the blob under the active tab. animate=false snaps instantly (first
    paint / resize / look-switch); animate=true springs + stretches (nav change). */
+function bnGeom(nav, i) {
+  const link = bnLinks(nav)[i];
+  const nr = nav.getBoundingClientRect();
+  const r = link.getBoundingClientRect();
+  return { left: r.left - nr.left, width: r.width };
+}
+
 function updateBottomIndicator(animate = true) {
   const nav = document.getElementById("bottom-nav");
   if (!nav || !nav.offsetWidth) return;            // hidden in legacy → skip
-  const links = bnLinks(nav);
-  const i = Math.max(0, links.findIndex((a) => a.classList.contains("active")));
-  moveBnIndicator(nav.querySelector(".bn-indicator"), links[i], nav, animate);
+  const i = Math.max(0, bnLinks(nav).findIndex((a) => a.classList.contains("active")));
+  settleBnTo(nav, i, animate);
 }
 
-function moveBnIndicator(ind, link, nav, animate) {
-  if (!ind || !link) return;
-  const nr = nav.getBoundingClientRect();
-  const dest = { left: link.getBoundingClientRect().left - nr.left, width: link.offsetWidth };
-  if (!animate) {
-    ind.style.transition = "none";
-    ind.style.width = dest.width + "px";
-    ind.style.transform = `translateX(${dest.left}px)`;
-    void ind.offsetWidth;
-    ind.style.transition = "";
-    return;
-  }
-  // liquid gloop: first stretch to bridge the gap to the target, then contract
-  // onto it. Reading the live rect (mid-transition too) makes fast drags flow.
-  const cr = ind.getBoundingClientRect();
-  const cur = { left: cr.left - nr.left, width: cr.width };
-  const bridgeLeft = Math.min(cur.left, dest.left);
-  const bridgeW = Math.max(cur.left + cur.width, dest.left + dest.width) - bridgeLeft;
-  ind.style.transition = "transform 0.2s cubic-bezier(.4,0,.3,1), width 0.2s cubic-bezier(.4,0,.3,1)";
-  ind.style.width = bridgeW + "px";
-  ind.style.transform = `translateX(${bridgeLeft}px)`;
-  clearTimeout(ind._gloop);
-  ind._gloop = setTimeout(() => {
-    ind.style.transition = "transform 0.28s cubic-bezier(.4,0,.2,1), width 0.28s cubic-bezier(.4,0,.2,1)";
-    ind.style.width = dest.width + "px";
-    ind.style.transform = `translateX(${dest.left}px)`;
-  }, 115);
+/* park the blob on slot i. Smooth easing lives in CSS; JS just sets the target
+   (transition off = instant snap for first paint / resize). One clean move —
+   no per-slot animation stacking. */
+function settleBnTo(nav, i, animate) {
+  const ind = nav.querySelector(".bn-indicator");
+  const blob = ind && ind.querySelector(".bn-blob");
+  if (!ind || !blob) return;
+  const g = bnGeom(nav, i);
+  ind.style.transition = animate ? "" : "none";
+  blob.style.transition = animate ? "" : "none";
+  ind.style.width = g.width + "px";
+  ind.style.transform = `translateX(${g.left}px)`;
+  blob.style.transform = "scaleX(1)";
+  if (!animate) { void ind.offsetWidth; ind.style.transition = ""; blob.style.transition = ""; }
 }
 
 function nearestBnIndex(nav, clientX) {
@@ -5985,41 +5978,52 @@ function nearestBnIndex(nav, clientX) {
 /* drag the blob left↔right; it snaps slot-to-slot (stretching between) and
    navigates to wherever you let go. A plain tap is just a zero-distance drag. */
 function wireBottomNavDrag(nav) {
-  let dragging = false, moved = false, curIdx = -1;
+  let dragging = false, moved = false, curIdx = -1, w = 0, lastX = 0;
   const ind = nav.querySelector(".bn-indicator");
+  const blob = ind && ind.querySelector(".bn-blob");
   const setHot = (i) => bnLinks(nav).forEach((a, k) => a.classList.toggle("bn-hot", k === i));
 
   nav.addEventListener("pointerdown", (e) => {
-    if (!nav.offsetWidth) return;
+    if (!nav.offsetWidth || !ind) return;
     dragging = true; moved = false;
     curIdx = nearestBnIndex(nav, e.clientX);
+    w = bnGeom(nav, curIdx).width;
+    lastX = e.clientX - nav.getBoundingClientRect().left - w / 2;
     try { nav.setPointerCapture(e.pointerId); } catch { /* ok */ }
   });
   nav.addEventListener("pointermove", (e) => {
     if (!dragging) return;
+    moved = true;
+    const nr = nav.getBoundingClientRect();
+    let x = e.clientX - nr.left - w / 2;
+    x = Math.max(4, Math.min(x, nr.width - w - 4));           // clamp inside the bar
+    const stretch = Math.max(1, Math.min(1 + Math.abs(x - lastX) / 55, 1.3)); // fling → gloop
+    // follow the finger directly — no transition, so it's one buttery motion
+    // with zero per-slot animation to stack up and jitter
+    ind.style.transition = "none";
+    blob.style.transition = "none";
+    ind.style.width = w + "px";
+    ind.style.transform = `translateX(${x}px)`;
+    blob.style.transform = `scaleX(${stretch})`;
+    lastX = x;
     const i = nearestBnIndex(nav, e.clientX);
-    if (i !== curIdx) {
-      moved = true; curIdx = i; setHot(i);
-      moveBnIndicator(ind, bnLinks(nav)[i], nav, true);   // spring + stretch to the slot
-    }
-    e.preventDefault();   // only own the gesture once it's an actual drag
+    if (i !== curIdx) { curIdx = i; setHot(i); }
+    e.preventDefault();
   });
   const end = (e) => {
     if (!dragging) return;
     dragging = false;
     bnLinks(nav).forEach((a) => a.classList.remove("bn-hot"));
-    if (moved) {   // a real drag → navigate to where we let go
+    if (moved) {                       // real drag → glide smoothly to the slot, then navigate
+      settleBnTo(nav, curIdx, true);   // CSS ease carries it; the stretch relaxes to 1
       const href = bnLinks(nav)[curIdx]?.getAttribute("href");
       if (href && href !== location.hash) location.hash = href.replace(/^#/, "");
-      else updateBottomIndicator(true);
     }
     // a plain tap falls through to the native <a> click below (never dead-ends)
     try { nav.releasePointerCapture(e.pointerId); } catch { /* ok */ }
   };
   nav.addEventListener("pointerup", end);
   nav.addEventListener("pointercancel", end);
-  // suppress the native click ONLY after a drag (pointerup already navigated);
-  // taps keep their normal link navigation as a hard fallback
   nav.addEventListener("click", (e) => { if (moved && e.target.closest("a")) { e.preventDefault(); moved = false; } });
 }
 
