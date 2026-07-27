@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v113";
+const APP_VERSION = "v114";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5928,7 +5928,7 @@ function bnLinks(nav) { return [...nav.querySelectorAll("a")]; }
    paint / resize / look-switch); animate=true springs + stretches (nav change). */
 function updateBottomIndicator(animate = true) {
   const nav = document.getElementById("bottom-nav");
-  if (!nav || !nav.offsetParent) return;            // hidden in legacy → skip
+  if (!nav || !nav.offsetWidth) return;            // hidden in legacy → skip
   const links = bnLinks(nav);
   const i = Math.max(0, links.findIndex((a) => a.classList.contains("active")));
   moveBnIndicator(nav.querySelector(".bn-indicator"), links[i], nav, animate);
@@ -5980,7 +5980,7 @@ function wireBottomNavDrag(nav) {
   const setHot = (i) => bnLinks(nav).forEach((a, k) => a.classList.toggle("bn-hot", k === i));
 
   nav.addEventListener("pointerdown", (e) => {
-    if (!nav.offsetParent) return;
+    if (!nav.offsetWidth) return;
     dragging = true; moved = false;
     curIdx = nearestBnIndex(nav, e.clientX);
     try { nav.setPointerCapture(e.pointerId); } catch { /* ok */ }
