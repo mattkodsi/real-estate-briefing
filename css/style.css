@@ -1670,7 +1670,7 @@ html, body { overflow-x: hidden; }
 
 /* ---------- catch-up strip ---------- */
 .catchup {
-  margin: 16px 0 22px;
+  margin: 16px 0 14px;
   border: 1px solid var(--rule);
   border-left: 3px solid var(--accent);
   border-radius: 10px;
@@ -3348,7 +3348,7 @@ button.cal-open:active { background: var(--rule); }
   top: 0;
   left: 50%;
   transform: translateX(-50%) translateZ(0);   /* own layer → steadier during the scroll-reset */
-  width: min(var(--page), 100vw);
+  width: 100vw;                                 /* full-width bar → the divider spans the whole screen */
   z-index: 60;
   background: var(--bar);
   -webkit-backdrop-filter: blur(24px) saturate(165%);
@@ -3362,7 +3362,9 @@ button.cal-open:active { background: var(--rule); }
 /* nav moves to the bottom bar; the rate ticker stays up top, with a little room
    below the wordmark/profile row (the tabs used to provide this) */
 :root[data-look="updated"] .tabs { display: none; }
-:root[data-look="updated"] .tab-row { margin-top: 10px; }
+/* equal breathing room above and below the rate ticker (below = rate-strip's own
+   4px pad + the masthead's 3px bottom pad = ~7px, so match it above) */
+:root[data-look="updated"] .tab-row { margin-top: 7px; }
 
 /* the floating frosted bottom nav (built in JS, body-level so its fixed
    position isn't trapped by the masthead's backdrop-filter) */
@@ -3486,7 +3488,7 @@ button.cal-open:active { background: var(--rule); }
 :root[data-look="updated"] #key-points li:last-child { border-bottom: none; padding-bottom: 1px; }
 :root[data-look="updated"] #watch-row { margin-top: 12px; border-top: none; padding-top: 0; }
 /* no hard divider lines in the card-based look — spacing separates instead */
-:root[data-look="updated"] .controls { border-top: none; padding-top: 0; margin-top: 18px; }
+:root[data-look="updated"] .controls { border-top: none; padding-top: 0; margin-top: 12px; }
 
 /* segmented Legacy/Updated toggle on the status page */
 .seg-toggle {
