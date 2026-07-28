@@ -3490,6 +3490,68 @@ button.cal-open:active { background: var(--rule); }
 /* no hard divider lines in the card-based look — spacing separates instead */
 :root[data-look="updated"] .controls { border-top: none; padding-top: 0; margin-top: 12px; }
 
+/* ── Onboard every remaining view to the elevation look ───────────────────
+   The feed cards got their dimension (luminous top rim in dark, soft shadow in
+   light, a hairline --card-bd border); these panels — Weekly themes, Arcs/Tales,
+   Desk metrics, the Rates/Pulse tiles + charts, the Almanac stat tiles and the
+   reader's end card — were still on the flat legacy --rule border, so they read
+   as un-onboarded. Same philosophy, applied consistently across the whole app. */
+:root[data-look="updated"] .theme,
+:root[data-look="updated"] .thread-card,
+:root[data-look="updated"] .metric-card,
+:root[data-look="updated"] .reader-done,
+:root[data-look="updated"] .pulse-tile,
+:root[data-look="updated"] .pulse-chart-panel,
+:root[data-look="updated"] .rate-tile,
+:root[data-look="updated"] .curve-wrap,
+:root[data-look="updated"] .mm-tile {
+  border: 1px solid var(--card-bd);
+  box-shadow: inset 0 1px 0 var(--card-rim), var(--card-shadow);
+}
+/* pull the older 8px corners into the rounded-card family */
+:root[data-look="updated"] .theme,
+:root[data-look="updated"] .curve-wrap { border-radius: 14px; }
+:root[data-look="updated"] .rate-tile { border-radius: 12px; }
+
+/* accent-spine aux boxes (reader explainer/arc boxes, term-of-day, pulse verdict)
+   keep their left accent bar and gain the same lift */
+:root[data-look="updated"] .reader-explainer,
+:root[data-look="updated"] .reader-canopy,
+:root[data-look="updated"] .reader-thread,
+:root[data-look="updated"] .totd,
+:root[data-look="updated"] .pulse-verdict {
+  border-color: var(--card-bd);
+  box-shadow: inset 0 1px 0 var(--card-rim), var(--card-shadow);
+}
+
+/* the two accent-framed heroes keep their frame but stop being flat in dark */
+:root[data-look="updated"] .desk-hero {
+  box-shadow: inset 0 1px 0 var(--card-rim),
+    0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent), var(--card-shadow);
+}
+:root[data-look="updated"] .canopy-card {
+  box-shadow: inset 3px 0 0 0 var(--accent), inset 0 1px 0 var(--card-rim), var(--card-shadow);
+}
+
+/* one radius system — the onboarded set ran from 8px to 14px, which read as
+   "half-finished." Content cards → 14px, small stat tiles → 12px. */
+:root[data-look="updated"] .story,
+:root[data-look="updated"] .catchup,
+:root[data-look="updated"] .status-card,
+:root[data-look="updated"] .player-card,
+:root[data-look="updated"] .day-card,
+:root[data-look="updated"] .desk-card,
+:root[data-look="updated"] .reader-next-card,
+:root[data-look="updated"] .reader-done,
+:root[data-look="updated"] .theme,
+:root[data-look="updated"] .thread-card,
+:root[data-look="updated"] .pulse-chart-panel,
+:root[data-look="updated"] .curve-wrap { border-radius: 14px; }
+:root[data-look="updated"] .metric-card,
+:root[data-look="updated"] .mm-tile,
+:root[data-look="updated"] .pulse-tile,
+:root[data-look="updated"] .rate-tile { border-radius: 12px; }
+
 /* segmented Legacy/Updated toggle on the status page */
 .seg-toggle {
   display: inline-flex;
