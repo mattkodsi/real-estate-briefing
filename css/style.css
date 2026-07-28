@@ -3075,6 +3075,10 @@ button.cal-open:active { background: var(--rule); }
   color: var(--ink-3); display: block; margin-bottom: 6px;
 }
 .pv-text { font-size: 15px; line-height: 1.5; color: var(--ink); font-family: var(--serif); }
+.pv-asof {
+  display: block; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--rule);
+  font-size: 11px; line-height: 1.4; color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
 
 .pulse-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .pulse-tab {
@@ -3363,6 +3367,26 @@ button.cal-open:active { background: var(--rule); }
 /* equal breathing room above and below the rate ticker (below = rate-strip's own
    4px pad + the masthead's 3px bottom pad = ~7px, so match it above) */
 :root[data-look="updated"] .tab-row { margin-top: 7px; }
+
+/* scroll-down auto-hide: collapse the wordmark/icons row (rate ticker stays).
+   The ResizeObserver re-measures --mast-h as this animates, so the feed rises to
+   reclaim the space in step with the collapse. */
+:root[data-look="updated"] .masthead-row {
+  overflow: hidden;
+  max-height: 80px;
+  transition: max-height .28s ease, opacity .2s ease, transform .28s ease, margin-top .28s ease;
+}
+:root[data-look="updated"].mast-hidden .masthead-row {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-6px);
+  margin-top: -1px;              /* swallow sub-pixel seam so rates sit flush */
+  pointer-events: none;
+}
+:root[data-look="updated"].mast-hidden .tab-row { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-look="updated"] .masthead-row { transition: none; }
+}
 
 /* the floating frosted bottom nav (built in JS, body-level so its fixed
    position isn't trapped by the masthead's backdrop-filter) */

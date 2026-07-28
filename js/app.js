@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v127";
+const APP_VERSION = "v128";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -2970,7 +2970,7 @@ async function renderDeskSection(id) {
 
   if (id === "pulse") {
     wrap.appendChild(pageHead("Market Pulse",
-      "One read on the whole market. Rates & Credit opens with the full interest-rate tool — Treasury curve, SOFR forwards, rate history — then the public-API series (Case-Shiller prices, Zillow rents by metro) and the CRE figures the trade press cites (Trepp delinquency, CBRE vacancy, cap-rate surveys), each tagged by source. Tap any signal for its full history."));
+      "One read on the whole market — rates, housing, and the CRE figures the trade press cites. Tap any signal for its full history."));
     const [pulse, metrics] = await Promise.all([getPulse(), getMetrics()]);
     buildMarketPulse(wrap, pulse, metrics);
     return;
@@ -3051,7 +3051,8 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
   const verdict = computeVerdict(pulse);
   const vb = document.createElement("div");
   vb.className = "pulse-verdict " + verdict.tone;
-  vb.innerHTML = `<span class="pv-kicker">The read</span><p class="pv-text">${verdict.text}</p>`;
+  vb.innerHTML = `<span class="pv-kicker">The read</span><p class="pv-text">${verdict.text}</p>`
+    + (verdict.asOf ? `<span class="pv-asof">${verdict.asOf}</span>` : "");
   wrap.appendChild(vb);
 
   // a tapped signal's chart now opens INLINE, right under its own tile (see
@@ -3338,6 +3339,9 @@ function miniSpark(hist, invert) {
 function computeVerdict(p) {
   const n = p.national || {};
   const bits = [];
+  const stamps = [];   // parallel "when" tags so the read carries a frame of reference
+  const dayStamp = (iso) => iso ? formatDate(iso, { month: "short", day: "numeric" }) : null;
+  const monStamp = (iso) => iso ? `${formatDate(iso, { month: "short" })} '${iso.slice(2, 4)}` : null;
   let easing = 0, tightening = 0;
   const mort = n.mortgage30;
   if (mort?.latest) {
@@ -3345,29 +3349,35 @@ function computeVerdict(p) {
     if (d < -0.02) { bits.push(`30-year mortgages are easing to ${mort.latest.value.toFixed(2)}%`); easing++; }
     else if (d > 0.02) { bits.push(`30-year mortgages have climbed to ${mort.latest.value.toFixed(2)}%`); tightening++; }
     else bits.push(`30-year mortgages are holding near ${mort.latest.value.toFixed(2)}%`);
+    if (mort.latest.date) stamps.push(`mortgages ${dayStamp(mort.latest.date)}`);
   }
   const hpi = n.hpi;
   if (hpi?.yoy != null) {
     bits.push(hpi.yoy > 4 ? `home prices are still rising (${signed(hpi.yoy)}% YoY)`
       : hpi.yoy > 0.5 ? `home-price growth has cooled to ${signed(hpi.yoy)}% YoY`
       : hpi.yoy > -0.5 ? "home prices have gone flat" : `home prices are slipping (${signed(hpi.yoy)}% YoY)`);
+    if (hpi.latest?.date) stamps.push(`prices ${monStamp(hpi.latest.date)}`);
   }
   const rent = p.zillowNational?.rent;
   if (rent?.yoy != null) {
     bits.push(rent.yoy > 4 ? `rents are running hot (${signed(rent.yoy)}% YoY)`
       : rent.yoy > 1.5 ? `rent growth is moderating (${signed(rent.yoy)}% YoY)`
       : `rents are soft (${signed(rent.yoy)}% YoY)`);
+    if (rent.latest?.date) stamps.push(`rents ${monStamp(rent.latest.date)}`);
   }
   const cre = n.cre_delinq;
   if (cre?.latest) {
     const d = cre.latest.value - (cre.prev?.value ?? cre.latest.value);
-    if (d > 0.03) { bits.push(`and CRE loan delinquency is grinding higher to ${cre.latest.value.toFixed(1)}%`); tightening++; }
-    else if (cre.latest.value > 1.2) bits.push(`with CRE loan delinquency elevated at ${cre.latest.value.toFixed(1)}%`);
+    let creIn = false;
+    if (d > 0.03) { bits.push(`and CRE loan delinquency is grinding higher to ${cre.latest.value.toFixed(1)}%`); tightening++; creIn = true; }
+    else if (cre.latest.value > 1.2) { bits.push(`with CRE loan delinquency elevated at ${cre.latest.value.toFixed(1)}%`); creIn = true; }
+    if (creIn && cre.latest.date) stamps.push(`CRE delinquency ${monStamp(cre.latest.date)}`);
   }
   let text = bits.join("; ").replace("; and", ", and");
   text = text.charAt(0).toUpperCase() + text.slice(1) + ".";
   const tone = tightening > easing ? "tight" : easing > tightening ? "easy" : "mixed";
-  return { text, tone };
+  const asOf = stamps.length ? `Latest prints — ${stamps.join(" · ")}` : "";
+  return { text, tone, asOf };
 }
 
 /* generalized scrubbable line chart for a Market Pulse series (reuses attachScrub) */
@@ -5919,6 +5929,36 @@ function syncMastheadOffset() {
     });
     mastRO.observe(m);
   }
+  wireMastAutohide();
+}
+
+/* Auto-hide the wordmark/icons row on scroll-down (the rate strip stays), so the
+   feed gets the vertical room back. Scrolling up or reaching the top brings it
+   back — the iOS toolbar pattern. Collapsing .masthead-row shrinks the masthead,
+   the ResizeObserver above re-measures --mast-h, and the feed rises to fill the
+   freed space for free. Updated look only. */
+let mastAutohideWired = false;
+function wireMastAutohide() {
+  if (mastAutohideWired) return;
+  mastAutohideWired = true;
+  let lastY = window.scrollY, ticking = false;
+  const apply = () => {
+    ticking = false;
+    if (document.documentElement.dataset.look !== "updated") {
+      document.documentElement.classList.remove("mast-hidden");
+      return;
+    }
+    const y = window.scrollY;
+    if (y <= 52) document.documentElement.classList.remove("mast-hidden");        // always show near the top
+    else if (y > lastY + 6) document.documentElement.classList.add("mast-hidden"); // scrolling down → hide
+    else if (y < lastY - 6) document.documentElement.classList.remove("mast-hidden"); // scrolling up → show
+    lastY = y;
+  };
+  window.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(apply);
+  }, { passive: true });
 }
 
 /* Pre-warm: the "jump"/clip on a view's FIRST open is really a first-render
