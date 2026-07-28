@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v119";
+const APP_VERSION = "v120";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -4882,16 +4882,25 @@ function renderReaderNext() {
     btn.append(k, t);
     btn.addEventListener("click", () => readerGo(nav.date, next.id));
     box.appendChild(btn);
-  } else if (!state.readerNavigated) {
-    // you opened the last story directly rather than swiping to it — no finish-line
-    // ritual (and no "N stories · M min" you didn't actually read), just a way back
+  } else if (!state.readerNavigated && nav.scope !== "catchup") {
+    // FULL-FEED only: you tapped a story near the bottom without stepping through,
+    // so don't claim "caught up on the whole day" — just a clean way back. (A
+    // catch-up set always shows its finish card below, swipe or tap, since
+    // reaching its end is the point and folds the new stories into the briefing.)
     const card = document.createElement("div");
     card.className = "reader-done minimal";
+    const h = document.createElement("div");
+    h.className = "rd-head";
+    h.textContent = "End of story";
+    const cur = nav.list[nav.idx];
+    const m = document.createElement("div");
+    m.className = "rd-meta";
+    m.textContent = [cur && cur.section, readMinutes(cur) ? readMinutes(cur) + " min read" : null].filter(Boolean).join(" · ");
     const back = document.createElement("button");
     back.className = "rd-back";
     back.textContent = "Back to the briefing";
     back.addEventListener("click", () => closeReaderNav());
-    card.appendChild(back);
+    card.append(h, m, back);
     box.appendChild(card);
   } else {
     // reached the end by swiping through — the ritual gets its finish line

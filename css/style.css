@@ -2404,8 +2404,9 @@ button,
   -webkit-tap-highlight-color: transparent;
 }
 /* opened-directly-at-the-end: a compact way back, no finish-line celebration */
-.reader-done.minimal { padding: 14px; background: none; border-color: transparent; }
-.reader-done.minimal .rd-back { color: var(--accent); background: none; border: 1px solid var(--rule); }
+/* opened the last story directly (not swiped through): a deliberate, honest end
+   — a proper card + finish line, but no "you read N stories" claim */
+.reader-done.minimal { padding: 22px 18px; }
 
 /* read-state: cards you've opened or marked read dim subtly */
 .story.is-read { opacity: 0.58; }
