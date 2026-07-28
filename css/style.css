@@ -2251,29 +2251,27 @@ body.is-offline .masthead { padding-top: 12px; }
   -webkit-tap-highlight-color: transparent;
 }
 
-/* interactive surfaces never text-select on long-press — graphs, cells,
-   buttons, chips. Article/reader prose stays selectable. */
-button,
-.chips, .chip,
-.heat, .heat-cell,
-.reader-progress,
-#rates-content,
-#map-canvas, .map-legend,
-.brief-row, .catchup, .watch-item,
-.cal-row, .metric-card, .timeline, .thread-list, .cal-grid, .cal-nav,
-.branch-leaves, .canopy-stats,
-.lede-kicker, .section-head, .meta {
+/* Text selection is OFF across the whole app by default — accidental
+   highlights fight the hold-to-peek gesture. The ONLY places it's turned
+   back on are actual article prose and editable fields (below). */
+html {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
-/* the one deliberate exception: the share card must keep its native
-   touch-and-hold photo menu */
+/* the deliberate exceptions — selectable again:
+   1. real article text (the reader body prose),
+   2. editable fields, so typing/caret still works,
+   3. the share card image, so the native touch-and-hold photo menu works. */
+#reader-body,
+#reader-body *,
+input, textarea, [contenteditable="true"],
 .sharebox img {
-  -webkit-user-select: auto;
-  user-select: auto;
+  -webkit-user-select: text;
+  user-select: text;
   -webkit-touch-callout: default;
 }
+.sharebox img { -webkit-user-select: auto; user-select: auto; }
 
 /* ---------- alerts (bell, toggles, following) ---------- */
 .bell-btn { position: relative; }
