@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v120";
+const APP_VERSION = "v121";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1100,7 +1100,8 @@ function showView(name) {
     a.classList.toggle("active", a.dataset.tab === tabName);
   }
   updateBottomIndicator(true);   // slide the liquid selector to the new tab
-  syncMastheadOffset();          // keep content clear of the fixed masthead
+  // (masthead offset is handled once via ResizeObserver — re-measuring on every
+  //  nav reflowed the content offset and was itself causing the page-open jump)
   $("date-nav").classList.toggle("off", name !== "briefing");
   // the masthead ticker is redundant on the Rates page itself
   $("rate-strip").classList.toggle("off", name === "rates");

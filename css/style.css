@@ -121,8 +121,10 @@ a { color: inherit; }
   max-width: var(--page);
   margin: 0 auto;
   /* black-translucent status bar + viewport-fit=cover draw content up behind
-     the clock / Dynamic Island — inset the top so the wordmark clears it */
-  padding: calc(16px + env(safe-area-inset-top)) var(--pad) 0;
+     the clock / Dynamic Island — inset the top so the wordmark clears it.
+     Tight above the wordmark; a couple px below so the profile circle / rate
+     ticker don't kiss the divider line. */
+  padding: calc(6px + env(safe-area-inset-top)) var(--pad) 4px;
   border-bottom: 1px solid var(--rule);
 }
 
@@ -3356,7 +3358,7 @@ button.cal-open:active { background: var(--rule); }
 }
 /* reserve the fixed masthead's height (measured in JS → --mast-h) so the feed
    starts below it and slides UNDER it as you scroll */
-:root[data-look="updated"] main { padding-top: var(--mast-h, 96px); }
+:root[data-look="updated"] main { padding-top: calc(var(--mast-h, 108px) + 10px); }
 /* nav moves to the bottom bar; the rate ticker stays up top */
 :root[data-look="updated"] .tabs { display: none; }
 
