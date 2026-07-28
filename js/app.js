@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v126";
+const APP_VERSION = "v127";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1159,6 +1159,10 @@ async function renderBriefing(date) {
     li.textContent = decodeEntities(text);
     if (id && (day.stories || []).some((s) => s.id === id)) {
       li.classList.add("kp-clickable");
+      // tap opens the story; hold peeks it (same story-peek as a feed card)
+      li.dataset.peek = "story";
+      li.dataset.peekDate = date;
+      li.dataset.peekId = id;
       li.addEventListener("click", () => { location.hash = `/story/${date}/${id}`; });
     }
     kp.appendChild(li);
