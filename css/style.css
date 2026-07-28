@@ -124,7 +124,7 @@ a { color: inherit; }
      the clock / Dynamic Island — inset the top so the wordmark clears it.
      Tight above the wordmark; a couple px below so the profile circle / rate
      ticker don't kiss the divider line. */
-  padding: calc(6px + env(safe-area-inset-top)) var(--pad) 4px;
+  padding: calc(6px + env(safe-area-inset-top)) var(--pad) 7px;
   border-bottom: 1px solid var(--rule);
 }
 
@@ -1670,7 +1670,7 @@ html, body { overflow-x: hidden; }
 
 /* ---------- catch-up strip ---------- */
 .catchup {
-  margin: 4px 0 22px;
+  margin: 16px 0 22px;
   border: 1px solid var(--rule);
   border-left: 3px solid var(--accent);
   border-radius: 10px;
@@ -3482,7 +3482,9 @@ button.cal-open:active { background: var(--rule); }
 }
 :root[data-look="updated"] .lede-kicker { color: var(--accent); }
 :root[data-look="updated"] #key-points li:last-child { border-bottom: none; padding-bottom: 1px; }
-:root[data-look="updated"] #watch-row { margin-top: 12px; }
+:root[data-look="updated"] #watch-row { margin-top: 12px; border-top: none; padding-top: 0; }
+/* no hard divider lines in the card-based look — spacing separates instead */
+:root[data-look="updated"] .controls { border-top: none; padding-top: 0; margin-top: 18px; }
 
 /* segmented Legacy/Updated toggle on the status page */
 .seg-toggle {
