@@ -124,7 +124,7 @@ a { color: inherit; }
      the clock / Dynamic Island — inset the top so the wordmark clears it.
      Tight above the wordmark; a couple px below so the profile circle / rate
      ticker don't kiss the divider line. */
-  padding: calc(6px + env(safe-area-inset-top)) var(--pad) 7px;
+  padding: calc(3px + env(safe-area-inset-top)) var(--pad) 3px;
   border-bottom: 1px solid var(--rule);
 }
 
@@ -3359,8 +3359,10 @@ button.cal-open:active { background: var(--rule); }
 /* reserve the fixed masthead's height (measured in JS → --mast-h) so the feed
    starts below it and slides UNDER it as you scroll */
 :root[data-look="updated"] main { padding-top: calc(var(--mast-h, 108px) + 10px); }
-/* nav moves to the bottom bar; the rate ticker stays up top */
+/* nav moves to the bottom bar; the rate ticker stays up top, with a little room
+   below the wordmark/profile row (the tabs used to provide this) */
 :root[data-look="updated"] .tabs { display: none; }
+:root[data-look="updated"] .tab-row { margin-top: 10px; }
 
 /* the floating frosted bottom nav (built in JS, body-level so its fixed
    position isn't trapped by the masthead's backdrop-filter) */
