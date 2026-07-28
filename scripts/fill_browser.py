@@ -102,8 +102,9 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
 
     stories = day.get("stories") or []
     targets = [s for s in stories
-               if fill_content._words(s.get("content")) < fill_content.MIN_WORDS
-               and s.get("url")]
+               if s.get("url") and (
+                   fill_content._words(s.get("content")) < fill_content.MIN_WORDS
+                   or (not s.get("image") and not s.get("imageChecked")))]
     if not targets:
         return 0, 0
     print(f"{date} ({source}): {len(stories)} stories, {len(targets)} need content")
@@ -132,15 +133,30 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
             if final and fill_content._is_wrapper(s["url"]) and not fill_content._is_wrapper(final):
                 s["url"] = fill_content._clean_url(final)
                 changed_urls += 1
-            if res.get("ok") and res["words"] > fill_content._words(s.get("content")) \
-                    and not fetch_article.title_mismatch(s.get("title", ""), res):
-                s["content"] = res["html"]
+            have = fill_content._words(s.get("content"))
+            ok = res.get("ok")
+            mism = ok and fetch_article.title_mismatch(s.get("title", ""), res)
+            if ok and not mism:
+                got_image = False
                 if not s.get("image") and res.get("image"):
                     s["image"] = res["image"]
-                s.pop("sourceBlocked", None)
-                filled.append(sid)
-                print(f"  ✓ {sid:<40} {res['words']} words")
-            elif res.get("ok") and fetch_article.title_mismatch(s.get("title", ""), res):
+                    got_image = True
+                if res["words"] > have:
+                    s["content"] = res["html"]
+                    s.pop("sourceBlocked", None)
+                    filled.append(sid)
+                    print(f"  ✓ {sid:<40} {res['words']} words")
+                elif got_image:
+                    # text was already complete (e.g. from the email body); we only
+                    # backfilled the missing hero image — still a change to publish
+                    s.pop("sourceBlocked", None)
+                    filled.append(sid)
+                    print(f"  🖼 {sid:<40} image backfilled ({have} words kept)")
+                elif not s.get("image"):
+                    # clean fetch, no hero at source → stop re-fetching it just for art
+                    s["imageChecked"] = True
+                    print(f"  · {sid:<40} no image at source")
+            elif mism:
                 # url pointed at the wrong article — leave a tap-through, don't
                 # show mismatched content under this headline
                 s["sourceBlocked"] = True
@@ -151,6 +167,10 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
                 s["sourceBlocked"] = True
                 failed.append((sid, "TRD Data (premium tier)"))
                 print(f"  ⤫ {sid:<40} TRD Data (premium tier)")
+            elif have >= fill_content.MIN_WORDS:
+                # here only for a missing image and the fetch missed (bot wall / error):
+                # the story's text is fine — never flag it blocked, just retry next run
+                print(f"  · {sid:<40} image fetch missed (text intact)")
             else:
                 s["sourceBlocked"] = True  # app: card taps through to the source
                 failed.append((sid, f"{res.get('words', 0)} words"

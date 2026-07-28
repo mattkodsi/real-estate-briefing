@@ -78,6 +78,9 @@ class ArticleExtractor(HTMLParser):
         self.out = []
         self.open_keep = []       # stack of emitted KEEP tags
         self.og_image = None
+        self.tw_image = None      # twitter:image fallback (many sites ship only this)
+        self.link_image = None    # <link rel="image_src"> fallback
+        self.body_image = None    # first real in-article <img>, last-resort hero
         self.title = None
         self._in_title = False
 
@@ -87,8 +90,17 @@ class ArticleExtractor(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
-        if tag == "meta" and a.get("property") == "og:image" and not self.og_image:
-            self.og_image = a.get("content")
+        if tag == "meta":
+            prop = a.get("property") or ""
+            name = a.get("name") or ""
+            if prop in ("og:image", "og:image:secure_url", "og:image:url") and not self.og_image:
+                self.og_image = a.get("content")
+            elif name in ("twitter:image", "twitter:image:src") and not self.tw_image:
+                self.tw_image = a.get("content")
+        if tag == "link" and not self.link_image:
+            rels = (a.get("rel") or "").lower().split()
+            if "image_src" in rels:
+                self.link_image = a.get("href")
         if tag == "title":
             self._in_title = True
 
@@ -103,6 +115,8 @@ class ArticleExtractor(HTMLParser):
             if not (m and int(m.group(1)) < 400) and src.startswith("http") and not JUNK_IMG.search(src):
                 alt = (a.get("alt") or "").replace('"', "&quot;")
                 self.out.append(f'<img src="{src}" alt="{alt}">')
+                if not self.body_image:
+                    self.body_image = src   # first real article image → last-resort hero
         elif emit and (tag in DROP_SUBTREES or
                        (self.junk_classes and JUNK.search(a.get("class", "") + " " + a.get("id", "")))):
             self.drop_depth = self.depth  # begin skipping this subtree
@@ -277,10 +291,19 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
         p2, body2, words2 = run(False)
         if words2 >= 120:
             p, body, words = p2, body2, words2
+    # hero image: prefer the social-card meta (og:image), then twitter:image /
+    # link[image_src], then the first real in-article image as a last resort — so a
+    # page that ships its art only as twitter:image (or none in meta at all) still
+    # gets a photo instead of a blank card.
+    def _pick_image(parser):
+        for cand in (parser.og_image, parser.tw_image, parser.link_image, parser.body_image):
+            if cand and cand.startswith("http") and not JUNK_IMG.search(cand):
+                return cand
+        return None
     out = {
         "ok": words > 120,
         "title": p.title,
-        "image": None if (p.og_image and JUNK_IMG.search(p.og_image)) else p.og_image,
+        "image": _pick_image(p),
         "html": body.strip(),
         "words": words,
         "finalUrl": final_url,  # after redirects — the real publisher's page

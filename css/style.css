@@ -3357,6 +3357,8 @@ button.cal-open:active { background: var(--rule); }
   backdrop-filter: blur(24px) saturate(165%);
   border-bottom: 1px solid var(--bar-bd);
   box-shadow: inset 0 1px 0 var(--bar-rim);
+  transition: transform .38s cubic-bezier(.33, 0, .1, 1);   /* smooth auto-hide slide */
+  will-change: transform;
 }
 /* reserve the fixed masthead's height (measured in JS → --mast-h) so the feed
    starts below it and slides UNDER it as you scroll */
@@ -3368,24 +3370,23 @@ button.cal-open:active { background: var(--rule); }
    4px pad + the masthead's 3px bottom pad = ~7px, so match it above) */
 :root[data-look="updated"] .tab-row { margin-top: 7px; }
 
-/* scroll-down auto-hide: collapse the wordmark/icons row (rate ticker stays).
-   The ResizeObserver re-measures --mast-h as this animates, so the feed rises to
-   reclaim the space in step with the collapse. */
-:root[data-look="updated"] .masthead-row {
-  overflow: hidden;
-  max-height: 80px;
-  transition: max-height .28s ease, opacity .2s ease, transform .28s ease, margin-top .28s ease;
+/* Scroll-down auto-hide → a clean, full-screen briefing. Scrolling down slides
+   the WHOLE top bar (wordmark + rates) up and the floating bottom nav down, off
+   screen; scrolling up or reaching the top brings them back. Pure transforms
+   (GPU, no reflow) so it's smooth. We only ever hide while scrolled DOWN, so the
+   space the bars vacate is filled by real feed content behind them — no gap, no
+   need to touch the feed's padding. */
+:root[data-look="updated"].mast-hidden .masthead {
+  transform: translateX(-50%) translateY(-101%) translateZ(0);
 }
-:root[data-look="updated"].mast-hidden .masthead-row {
-  max-height: 0;
+:root[data-look="updated"].mast-hidden #bottom-nav {
+  transform: translate(-50%, calc(100% + 28px));
   opacity: 0;
-  transform: translateY(-6px);
-  margin-top: -1px;              /* swallow sub-pixel seam so rates sit flush */
   pointer-events: none;
 }
-:root[data-look="updated"].mast-hidden .tab-row { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) {
-  :root[data-look="updated"] .masthead-row { transition: none; }
+  :root[data-look="updated"] .masthead,
+  :root[data-look="updated"] #bottom-nav { transition: none !important; }
 }
 
 /* the floating frosted bottom nav (built in JS, body-level so its fixed
@@ -3425,6 +3426,7 @@ button.cal-open:active { background: var(--rule); }
   -webkit-user-select: none;
   -webkit-touch-callout: none;
   touch-action: none;
+  transition: transform .38s cubic-bezier(.33, 0, .1, 1), opacity .28s ease;   /* smooth auto-hide slide */
 }
 :root[data-look="updated"] #bottom-nav a {
   position: relative;

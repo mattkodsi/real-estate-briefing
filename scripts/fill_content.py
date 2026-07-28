@@ -214,16 +214,30 @@ def _try_story(s: dict) -> tuple[str, object]:
     final = res.get("finalUrl")
     if final and _is_wrapper(s["url"]) and not _is_wrapper(final):
         s["url"] = _clean_url(final)
-    if res.get("ok") and _words(res.get("html")) > have:
+    if res.get("ok"):
+        mism = fetch_article.title_mismatch(s.get("title", ""), res)
+        improved = _words(res.get("html")) > have
         # guard against a mis-paired link: if the headline shares no distinctive
         # name with the fetched article, the url pointed at the wrong story —
-        # don't attach that content under this headline
-        if fetch_article.title_mismatch(s.get("title", ""), res):
+        # don't attach that content (or its image) under this headline
+        if improved and mism:
             return "mismatch", "fetched article doesn't match the headline — url likely mis-paired (leaving as a tap-through)"
-        s["content"] = res["html"]
-        if not s.get("image") and res.get("image"):
+        got_image = False
+        if not mism and not s.get("image") and res.get("image"):
             s["image"] = res["image"]
-        return "filled", res["words"]
+            got_image = True
+        if improved and not mism:
+            s["content"] = res["html"]
+            return "filled", res["words"]
+        # content wasn't improved (the story already had fuller text — e.g. lifted
+        # from the email body) but we may have just backfilled a missing image
+        if got_image:
+            return "imageonly", f"image backfilled ({have} words kept)"
+        if not s.get("image"):
+            # a clean fetch that yielded no usable hero — record it so the
+            # image-missing target below stops re-fetching this story forever
+            s["imageChecked"] = True
+            return "nochange", "no image at source"
     if res.get("notFound"):
         return "failed", "404 at source — the story's url looks wrong (never guess urls; use the email's link)"
     if res.get("premiumData"):
@@ -249,7 +263,13 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
     stories = day.get("stories") or []
     # briefs render compactly in the feed but still get full text — every story
     # with a url deserves a reader page
-    to_fetch = [s for s in stories if _words(s.get("content")) < MIN_WORDS and s.get("url")]
+    # fetch a story that still needs TEXT (under MIN_WORDS) OR one that has text but
+    # is still missing a hero IMAGE and hasn't already been checked — a story that
+    # arrived text-complete from the email body (CRE Daily often does) would
+    # otherwise never be revisited to grab its og:image.
+    to_fetch = [s for s in stories if s.get("url") and (
+        _words(s.get("content")) < MIN_WORDS
+        or (not s.get("image") and not s.get("imageChecked")))]
     skipped = len(stories) - len(to_fetch)
     filled, paywalled, dropped = [], [], []
     unresolved = {}  # id -> (kind, detail); kind in {"blocked", "failed"}
@@ -267,6 +287,15 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
                 # stale reconnect flag so the app's nudge self-heals
                 flag_reconnect(_registrable(s.get("url", "")), False)
                 print(f"  ✓ {sid:<40} {detail} words{tag}")
+            elif status == "imageonly":
+                # text was already complete; we only backfilled the missing hero
+                filled.append(sid)   # a real change → republish
+                unresolved.pop(sid, None)
+                print(f"  🖼 {sid:<40} {detail}{tag}")
+            elif status == "nochange":
+                # clean fetch, nothing new to add (and no image at source) — not a
+                # failure; imageChecked is now set so we won't re-fetch it for art
+                unresolved.pop(sid, None)
             elif status == "paywalled":
                 if sid not in paywalled:
                     paywalled.append(sid)
