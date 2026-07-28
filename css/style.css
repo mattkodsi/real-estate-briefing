@@ -472,8 +472,8 @@ main {
   line-height: 1;
   color: var(--ink-2);
   border: 1px solid var(--rule);
-  border-radius: 7px;
-  padding: 4px 8px;
+  border-radius: 99px;    /* clean pills, consistent across the app */
+  padding: 4px 9px;
   white-space: nowrap;
 }
 
@@ -626,23 +626,36 @@ main {
 
 .map-title { font-size: 12.5px; color: var(--ink-2); }
 
+/* clean segmented control (a track with a soft active pill) — no bordered box or
+   divider lines. Shared by the map Day/Week/All and the almanac People/Companies/
+   Terms toggles (index-seg). */
 .map-toggle {
   display: flex;
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  overflow: hidden;
+  gap: 2px;
+  padding: 3px;
+  background: var(--rule);
+  border-radius: 11px;
 }
 
 .map-toggle button {
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.4px;
-  padding: 5px 11px;
-  color: var(--ink-3);
-  background: var(--box);
+  letter-spacing: 0.3px;
+  padding: 6px 13px;
+  color: var(--ink-2);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.map-toggle button.on { background: var(--ink); color: var(--bg); }
+.map-toggle button.on {
+  background: var(--box);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+}
 
 .map-filters { display: flex; gap: 8px; margin: 8px 0 4px; flex-wrap: wrap; }
 .map-filters .ctl-select { flex: 0 1 auto; }

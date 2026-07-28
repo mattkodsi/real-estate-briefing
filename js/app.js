@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v118";
+const APP_VERSION = "v119";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5886,13 +5886,44 @@ function applyLook() {
   document.documentElement.setAttribute("data-look", look);
   ensureBottomNav();
   requestAnimationFrame(() => { updateBottomIndicator(false); syncMastheadOffset(); });
+  prewarmData();   // warm every view's data cache at idle so first opens don't shift
 }
 
 /* the updated look pins the masthead (position:fixed) so the feed slides under
-   its frosted blur — measure its height into --mast-h so content clears it. */
+   its frosted blur — measure its height into --mast-h so content clears it. A
+   ResizeObserver keeps it correct when the masthead grows (e.g. the rate strip
+   loads AFTER first paint), which otherwise clips the first card under the bar. */
+let mastRO = null;
 function syncMastheadOffset() {
   const m = document.querySelector(".masthead");
-  if (m) document.documentElement.style.setProperty("--mast-h", Math.round(m.getBoundingClientRect().height) + "px");
+  if (!m) return;
+  document.documentElement.style.setProperty("--mast-h", Math.round(m.getBoundingClientRect().height) + "px");
+  if (!mastRO && window.ResizeObserver) {
+    mastRO = new ResizeObserver(() => {
+      const el = document.querySelector(".masthead");
+      if (el) document.documentElement.style.setProperty("--mast-h", Math.round(el.getBoundingClientRect().height) + "px");
+    });
+    mastRO.observe(m);
+  }
+}
+
+/* Pre-warm: the "jump"/clip on a view's FIRST open is really a first-render
+   shift — the view fetches its data async, renders empty, then re-lays out when
+   the data lands. Warming every data cache at idle after the app opens means
+   the first visit already has data in hand, so there's no async re-layout to
+   jerk the fixed bars. Idle-scheduled so it never competes with today's feed. */
+let prewarmed = false;
+function prewarmData() {
+  if (prewarmed) return;
+  prewarmed = true;
+  const jobs = [getAllDays, getPlayers, getTerms, getThreads, getCampaigns, getEvents, getMetrics, getPulse];
+  const idle = window.requestIdleCallback || ((f) => setTimeout(f, 120));
+  const runNext = () => {
+    const job = jobs.shift();
+    if (!job) return;
+    Promise.resolve().then(job).catch(() => { /* re-fetches on real visit */ }).finally(() => idle(runNext));
+  };
+  idle(runNext);
 }
 
 /* The updated look moves navigation to a floating bottom bar. Build it once from
