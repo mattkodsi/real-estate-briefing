@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v117";
+const APP_VERSION = "v118";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5974,7 +5974,7 @@ function bnLoop(nav) {
   const tick = () => {
     const s = nav._bn;
     if (!s) { bnRaf = 0; return; }
-    const dp = (s.tx - s.pos) * 0.2;      // ease position toward target (no overshoot)
+    const dp = (s.tx - s.pos) * (s.ease || 0.2);   // per-move ease (drag responsive, settle gentle)
     const dw = (s.tw - s.w) * 0.25;
     s.pos += dp;
     s.w += dw;
@@ -6001,6 +6001,7 @@ function settleBnTo(nav, i, animate) {
     nav._bn.pos = g.left; nav._bn.w = g.width; nav._bn.stretch = 1;
     bnRender(nav);
   } else {
+    nav._bn.ease = 0.1;   // gentle, graceful attach on release / tap
     bnLoop(nav);
   }
 }
@@ -6038,6 +6039,7 @@ function wireBottomNavDrag(nav) {
     x = Math.max(4, Math.min(x, nr.width - dragW - 4));   // clamp inside the bar
     nav._bn.tx = x;                    // the spring chases the finger; its lag is the stretch
     nav._bn.tw = dragW;
+    nav._bn.ease = 0.2;                // responsive while the finger is down
     bnLoop(nav);
     const i = nearestBnIndex(nav, e.clientX);
     if (i !== curIdx) { curIdx = i; setHot(i); }

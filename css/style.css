@@ -3276,16 +3276,16 @@ button.cal-open:active { background: var(--rule); }
     --bar: rgba(14, 18, 26, 0.62);
     --bar-bd: rgba(255, 255, 255, 0.12);
     --bar-rim: rgba(255, 255, 255, 0.14);
-    --brief-tint: color-mix(in srgb, var(--accent) 15%, var(--box));
-    --brief-bd: color-mix(in srgb, var(--accent) 32%, transparent);
+    --brief-tint: color-mix(in srgb, var(--accent) 9%, var(--box));
+    --brief-bd: color-mix(in srgb, var(--accent) 20%, transparent);
   }
 }
 :root[data-theme="dark"][data-look="updated"] {
   --bar: rgba(14, 18, 26, 0.62);
   --bar-bd: rgba(255, 255, 255, 0.12);
   --bar-rim: rgba(255, 255, 255, 0.14);
-  --brief-tint: color-mix(in srgb, var(--accent) 15%, var(--box));
-  --brief-bd: color-mix(in srgb, var(--accent) 32%, transparent);
+  --brief-tint: color-mix(in srgb, var(--accent) 9%, var(--box));
+  --brief-bd: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 :root[data-theme="light"][data-look="updated"] {
   --bar: rgba(255, 255, 255, 0.68);
@@ -3331,7 +3331,7 @@ button.cal-open:active { background: var(--rule); }
   position: fixed;                 /* fixed (not sticky) so blur + pinning coexist on iOS */
   top: 0;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateZ(0);   /* own layer → steadier during the scroll-reset */
   width: min(var(--page), 100vw);
   z-index: 60;
   background: var(--bar);
@@ -3357,6 +3357,7 @@ button.cal-open:active { background: var(--rule); }
   inset: 0;
   z-index: 40;
   pointer-events: none;
+  transform: translateZ(0);        /* stable compositor layer for the fixed bar */
 }
 #bottom-nav { display: none; }
 :root[data-look="updated"] #bottom-nav {
