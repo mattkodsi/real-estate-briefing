@@ -63,12 +63,25 @@ else:
 # routine items ("Miami Realtors expands into a county"). The marquee list is the
 # household-name floor: high precision, so a flag is almost always a real miss.
 MARQUEE = [
-    "related", "vornado", "sl green", "brookfield", "blackstone", "tishman speyer",
+    # NY developers/owners the reader tracks
+    "related", "vornado", "sl green", "tishman speyer",
     "extell", "silverstein", "rxr", "hines", "durst", "rudin", "fisher brothers",
     "witkoff", "macklowe", "zeckendorf", "ken griffin", "kenneth griffin",
-    "boston properties", "starwood", "oaktree", "fortress capital",
+    "boston properties", "bxp", "starwood", "oaktree", "fortress capital",
     "trump organization", "kushner", "gary barnett", "steve roth", "marc holliday",
     "rob speyer", "stephen ross", "sl green realty", "vornado realty",
+    # national capital / owners — household names whose headline appearance means
+    # the story is ABOUT them (influence & prominence, per step-4 ranking rule 6),
+    # not a bit-part deal credit. (Pure-brokerage credits like "CBRE arranges…" are
+    # deliberately left off — they too often headline routine closings.)
+    "brookfield", "blackstone", "kkr", "apollo", "carlyle", "ares management",
+    "tpg", "bain capital", "koch", "goldman", "goldman sachs", "jpmorgan",
+    "morgan stanley", "wells fargo", "bank of america", "citigroup",
+    "kimco", "simon property", "prologis", "realty income", "welltower",
+    "avalonbay", "equity residential",
+    # the hyperscalers / power players driving the AI-infrastructure buildout
+    "amazon", "aws", "microsoft", "google", "alphabet", "meta", "nvidia",
+    "oracle", "openai", "apple", "talen", "equinix", "digital realty",
 ]
 PAT = [(re.compile(r"\b" + re.escape(m) + r"\b", re.I), m.title()) for m in MARQUEE]
 
@@ -104,6 +117,20 @@ ATTR = re.compile(
     r"|[A-Z][A-Za-z.&]+(?:\s+[A-Z][A-Za-z.&]+)?\s+(?:reported|data|survey|index|found|says|said)\b")
 def cites_series(summary):
     return bool(summary) and bool(FIG.search(summary)) and bool(ATTR.search(summary))
+
+# ---- trigger 6: the dominant sector arc (currently the AI data-center buildout)-
+# The reader is actively tracking the AI-infrastructure buildout — it's THE arc of
+# the moment (financings, power deals, moratoriums, ABS rules, labor). Those beats
+# kept landing as briefs because they're "National" and carry no single marquee
+# owner. A data-center / hyperscaler story with any substantive dealType is an
+# installment of that arc → a card, not a footnote. (Kept as an explicit, dated
+# theme, not a blanket money rule — revisit if the buildout stops being the story.)
+DATACENTER = re.compile(
+    r"\b(data[- ]cent(?:er|re)s?|hyperscal\w*|ai infrastructure|ai campus|"
+    r"compute capacity|gpu cluster|colocation)\b", re.I)
+def is_sector_arc(text, deal):
+    return bool(DATACENTER.search(text or "")) and deal in (
+        "Development", "Financing", "Sale", "Policy", "Industry", "Legal", "Markets", "Distress")
 
 # ---- floor evaluation for ONE brief ------------------------------------------
 def floor_triggers(s):
@@ -143,6 +170,10 @@ def floor_triggers(s):
     # 5 · Cited market series
     if cites_series(summary):
         hits.append("cited-series")
+
+    # 6 · Dominant sector arc — the AI data-center buildout
+    if is_sector_arc(f"{title}. {summary}", deal):
+        hits.append("sector-arc:data-center")
 
     return hits
 
