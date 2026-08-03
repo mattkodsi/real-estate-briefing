@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v131";
+const APP_VERSION = "v132";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -315,6 +315,16 @@ async function init() {
       openTermSheet(term.dataset.slug);
     }
   }, true);
+  // tapping the nav button for the page you're already on scrolls back to the top
+  // (both the bottom bar in the updated look and the top tabs in legacy). showView
+  // marks the current tab's link `.active`, so that's the "already here" signal.
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest?.("#bottom-nav a, .tabs a");
+    if (link && link.classList.contains("active")) {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  });
   $("sheet-backdrop").addEventListener("click", () => sheetDismiss());
   // drag the sheet with your finger — tracks smoothly, springs back or flings away
   const sheetCard = $("sheet-card");
