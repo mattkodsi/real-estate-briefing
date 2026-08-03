@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v132";
+const APP_VERSION = "v133";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1697,6 +1697,10 @@ function renderFeed(day) {
   const feed = $("feed");
   feed.innerHTML = "";
   const all = day.stories || [];
+  // holistic importance rank = position in day.stories (the pipeline writes them
+  // best-first); used to order stories WITHIN each group and the Top Stories band.
+  const rankOf = new Map(all.map((s, i) => [s.id, i]));
+  const byImportance = (a, b) => (rankOf.get(a.id) ?? 1e9) - (rankOf.get(b.id) ?? 1e9);
 
   renderCatchup(feed, day);
 
@@ -1746,8 +1750,10 @@ function renderFeed(day) {
   }
   const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   for (const [name, list] of ordered) {
-    // within non-topic groupings, biggest deals first
-    if (key !== "section") list.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
+    // within every grouping, order by the day's holistic importance rank (the
+    // story's position in day.stories — the pipeline writes them best-first), NOT
+    // by deal size. Keeps the group order/labels; just ranks inside each group.
+    list.sort(byImportance);
     feed.appendChild(sectionHead(groupLabel(name)));
     const group = document.createElement("div");
     group.className = "story-group";
@@ -4856,6 +4862,8 @@ function buildHistorySvg(r, key, range) {
 
 function feedOrder(day) {
   const full = (day.stories || []).filter((s) => !s.brief);
+  const rankOf = new Map((day.stories || []).map((s, i) => [s.id, i])); // array = importance rank
+  const byImportance = (a, b) => (rankOf.get(a.id) ?? 1e9) - (rankOf.get(b.id) ?? 1e9);
   const featured = full.filter((s) => s.featured);
   const rest = full.filter((s) => !s.featured);
   const key = state.groupBy;
@@ -4868,7 +4876,7 @@ function feedOrder(day) {
   const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   const out = [...featured];
   for (const [, list] of ordered) {
-    if (key !== "section") list.sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0));
+    list.sort(byImportance);   // within each group, importance rank — matches the feed
     out.push(...list);
   }
   // readable briefs ride at the end, mirroring the "Also today" strip
