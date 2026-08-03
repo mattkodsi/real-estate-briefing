@@ -3389,6 +3389,26 @@ button.cal-open:active { background: var(--rule); }
   :root[data-look="updated"] #bottom-nav { transition: none !important; }
 }
 
+/* Offline banner + the fixed masthead. In the updated look the masthead is
+   position:fixed over top:0, so the in-flow banner would hide behind it AND leave
+   a double gap. Pin the banner on top, drop the masthead below it by the banner's
+   measured height (--offline-h, set in setOnlineState), and pad main for both. */
+:root[data-look="updated"] body.is-offline .offline-banner {
+  position: fixed; top: 0; left: 50%; transform: translateX(-50%);
+  width: 100vw; z-index: 70;
+}
+:root[data-look="updated"] body.is-offline .masthead {
+  top: var(--offline-h, 0px);
+  padding-top: 5px;               /* the banner carries the notch inset now */
+}
+:root[data-look="updated"] body.is-offline main {
+  padding-top: calc(var(--offline-h, 0px) + var(--mast-h, 108px) + 10px);
+}
+/* keep the scroll-down auto-hide fully clearing the screen when the banner is up */
+:root[data-look="updated"].mast-hidden body.is-offline .masthead {
+  transform: translateX(-50%) translateY(calc(-101% - var(--offline-h, 0px))) translateZ(0);
+}
+
 /* the floating frosted bottom nav (built in JS, body-level so its fixed
    position isn't trapped by the masthead's backdrop-filter) */
 /* one stable full-viewport fixed layer holds the bar — it never reflows, so the

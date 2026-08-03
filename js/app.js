@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v130";
+const APP_VERSION = "v131";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -838,6 +838,13 @@ function setOnlineState(on) {
   document.body.classList.toggle("is-offline", !on);
   const b = $("offline-banner");
   if (b) b.hidden = on;
+  // The updated look pins the masthead (position:fixed) over top:0, so the banner
+  // can't just sit in the normal flow above it — it'd hide behind the masthead and
+  // leave a double gap (the bug). Measure the shown banner into --offline-h; the
+  // updated-look CSS pins the banner on top, drops the masthead below it, and pads
+  // main for both. 0 when online, so nothing shifts.
+  const h = (!on && b) ? b.offsetHeight : 0;
+  document.documentElement.style.setProperty("--offline-h", h + "px");
   if (on) preloadForOffline(false);
 }
 
