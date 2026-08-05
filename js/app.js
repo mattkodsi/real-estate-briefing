@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v139";
+const APP_VERSION = "v140";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -5997,6 +5997,7 @@ async function activateProfile(slug, meta) {
     try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
     paintAvatar();
     applyLook();
+    applyTheme();
     return;
   }
   meta = meta || FOUNDERS.find((f) => f.slug === slug) || null;
@@ -6039,6 +6040,7 @@ async function activateProfile(slug, meta) {
   schedulePrefsFlush(true); // ensure the row exists (and carries any migration)
   paintAvatar();
   applyLook();
+  applyTheme();
 }
 
 function pref(key, fallback) {
@@ -6064,6 +6066,14 @@ function applyLook() {
   ensureBottomNav();
   requestAnimationFrame(() => { updateBottomIndicator(false); syncMastheadOffset(); });
   prewarmData();   // warm every view's data cache at idle so first opens don't shift
+}
+
+// light / dark / system. "system" removes the attribute so the OS setting (via
+// prefers-color-scheme) drives it; "light"/"dark" force it regardless of the OS.
+function applyTheme() {
+  const t = pref("theme", "system");
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+  else document.documentElement.removeAttribute("data-theme");
 }
 
 /* the updated look pins the masthead (position:fixed) so the feed slides under
@@ -8160,6 +8170,35 @@ async function renderStatus() {
 
   // Appearance — the refreshed look (default) vs the legacy look (per reader)
   const lookCard = statusCard("Appearance");
+
+  // Theme: light / dark / system (per reader)
+  const themeLabel = document.createElement("div");
+  themeLabel.className = "seg-label";
+  themeLabel.textContent = "Theme";
+  lookCard.appendChild(themeLabel);
+  const themeSeg = document.createElement("div");
+  themeSeg.className = "seg-toggle";
+  themeSeg.setAttribute("role", "group");
+  themeSeg.setAttribute("aria-label", "Theme");
+  const currentTheme = pref("theme", "system");
+  for (const [val, label] of [["light", "Light"], ["dark", "Dark"], ["system", "System"]]) {
+    const b = document.createElement("button");
+    b.className = "seg-opt" + (currentTheme === val ? " on" : "");
+    b.textContent = label;
+    b.addEventListener("click", () => {
+      setPref("theme", val);
+      applyTheme();
+      for (const x of themeSeg.querySelectorAll(".seg-opt")) x.classList.remove("on");
+      b.classList.add("on");
+    });
+    themeSeg.appendChild(b);
+  }
+  lookCard.appendChild(themeSeg);
+
+  const lookLabel = document.createElement("div");
+  lookLabel.className = "seg-label";
+  lookLabel.textContent = "Layout";
+  lookCard.appendChild(lookLabel);
   const seg = document.createElement("div");
   seg.className = "seg-toggle";
   seg.setAttribute("role", "group");
@@ -8178,10 +8217,6 @@ async function renderStatus() {
     seg.appendChild(b);
   }
   lookCard.appendChild(seg);
-  const lookNote = document.createElement("p");
-  lookNote.className = "status-note";
-  lookNote.textContent = "Updated moves the menu to a frosted bottom bar and gives the day's brief its own cards. Legacy is the original top-tab layout.";
-  lookCard.appendChild(lookNote);
   wrap.appendChild(lookCard);
 
   const latest = state.dates[state.dates.length - 1];

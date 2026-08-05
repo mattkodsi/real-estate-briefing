@@ -1,3 +1,8 @@
+/* theme: system by default, or forced via data-theme (set by applyTheme in JS) */
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
 :root {
   /* Soft-card ground: a cool paper-gray (not warm cream) so white cards lift
      off it on a shadow instead of needing a border. */
@@ -19,8 +24,7 @@
   --page: 680px;    /* app frame width; widens on desktop */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) {
     --bg: #0d1015;
     --box: #171b21;
     --ink: #e8ebf0;
@@ -33,6 +37,19 @@
     --card-shadow-press: 0 1px 2px rgba(0,0,0,.5), 0 2px 6px -3px rgba(0,0,0,.5);
   }
 }
+:root[data-theme="dark"] {
+    --bg: #0d1015;
+    --box: #171b21;
+    --ink: #e8ebf0;
+    --ink-2: #a3abb6;
+    --ink-3: #6c7480;
+    --rule: #242b34;
+    --rule-strong: #e8ebf0;
+    --accent: #8fabe6;
+    --card-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 24px -14px rgba(0,0,0,.55);
+    --card-shadow-press: 0 1px 2px rgba(0,0,0,.5), 0 2px 6px -3px rgba(0,0,0,.5);
+  }
+
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -225,10 +242,10 @@ a { color: inherit; }
 .rs-val.up { color: #1e8e3e; font-weight: 700; }
 .rs-val.down { color: #d23f31; font-weight: 700; }
 
-@media (prefers-color-scheme: dark) {
-  .rs-val.up { color: #5bd07f; }
-  .rs-val.down { color: #ff7b6e; }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .rs-val.up { color: #5bd07f; }:root:not([data-theme="light"]) .rs-val.down { color: #ff7b6e; }
 }
+:root[data-theme="dark"] .rs-val.up { color: #5bd07f; }:root[data-theme="dark"] .rs-val.down { color: #ff7b6e; }
+
 
 /* On narrow screens the strip becomes its own slim data bar under the tabs */
 @media (max-width: 700px) {
@@ -716,9 +733,10 @@ main {
 .leaflet-popup-content-wrapper { background: var(--box); color: var(--ink); border-radius: 8px; }
 .leaflet-popup-tip { background: var(--box); }
 
-@media (prefers-color-scheme: dark) {
-  .leaflet-control-attribution { background: rgba(16,18,20,0.7) !important; color: var(--ink-3) !important; }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .leaflet-control-attribution { background: rgba(16,18,20,0.7) !important; color: var(--ink-3) !important; }
 }
+:root[data-theme="dark"] .leaflet-control-attribution { background: rgba(16,18,20,0.7) !important; color: var(--ink-3) !important; }
+
 
 /* ---------- Players ---------- */
 .players-bar {
@@ -916,10 +934,10 @@ main {
 .rt-chg.down { color: #d23f31; }
 .rt-chg .rt-pct { font-weight: 600; color: var(--ink-3); }
 
-@media (prefers-color-scheme: dark) {
-  .rt-chg.up { color: #5bd07f; }
-  .rt-chg.down { color: #ff7b6e; }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .rt-chg.up { color: #5bd07f; }:root:not([data-theme="light"]) .rt-chg.down { color: #ff7b6e; }
 }
+:root[data-theme="dark"] .rt-chg.up { color: #5bd07f; }:root[data-theme="dark"] .rt-chg.down { color: #ff7b6e; }
+
 
 /* Chart header: identical geometry in every mode. Row 1 = title left, badge
    pinned right. Row 2 = controls, always their own row. Nothing shifts with
@@ -2202,14 +2220,10 @@ body.is-offline .masthead { padding-top: 12px; }
 }
 .reconnect-note { font-size: 11px; color: var(--ink-3); line-height: 1.5; margin: 12px 0 0; }
 
-@media (prefers-color-scheme: dark) {
-  .status-value.ok { color: #5bd07f; }
-  .status-value.warn { color: #e8a54b; }
-  .status-value.bad { color: #ff7b6e; }
-  .health-dot.ok { background: #5bd07f; }
-  .health-dot.warn { background: #e8a54b; }
-  .health-dot.bad { background: #ff7b6e; }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .status-value.ok { color: #5bd07f; }:root:not([data-theme="light"]) .status-value.warn { color: #e8a54b; }:root:not([data-theme="light"]) .status-value.bad { color: #ff7b6e; }:root:not([data-theme="light"]) .health-dot.ok { background: #5bd07f; }:root:not([data-theme="light"]) .health-dot.warn { background: #e8a54b; }:root:not([data-theme="light"]) .health-dot.bad { background: #ff7b6e; }
 }
+:root[data-theme="dark"] .status-value.ok { color: #5bd07f; }:root[data-theme="dark"] .status-value.warn { color: #e8a54b; }:root[data-theme="dark"] .status-value.bad { color: #ff7b6e; }:root[data-theme="dark"] .health-dot.ok { background: #5bd07f; }:root[data-theme="dark"] .health-dot.warn { background: #e8a54b; }:root[data-theme="dark"] .health-dot.bad { background: #ff7b6e; }
+
 
 /* ---------- share card viewer ---------- */
 .sharebox {
@@ -2497,10 +2511,10 @@ body.sheet-open, body.sheet-open * {
 .metric-geo.geo-regional { color: #c2740a; }
 .metric-card.mc-national { border-left: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); }
 .metric-card.mc-regional { border-left: 3px solid color-mix(in srgb, #d98324 62%, transparent); }
-@media (prefers-color-scheme: dark) {
-  .metric-geo.geo-regional { color: #e8a54b; }
-  .metric-card.mc-regional { border-left-color: color-mix(in srgb, #e8a54b 55%, transparent); }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .metric-geo.geo-regional { color: #e8a54b; }:root:not([data-theme="light"]) .metric-card.mc-regional { border-left-color: color-mix(in srgb, #e8a54b 55%, transparent); }
 }
+:root[data-theme="dark"] .metric-geo.geo-regional { color: #e8a54b; }:root[data-theme="dark"] .metric-card.mc-regional { border-left-color: color-mix(in srgb, #e8a54b 55%, transparent); }
+
 
 .comp-sortbar { display: flex; align-items: center; gap: 6px; margin: 4px 0 10px; flex-wrap: wrap; }
 .comp-sort {
@@ -2627,7 +2641,9 @@ body.sheet-open, body.sheet-open * {
 }
 .thread-status.active { color: #1e8e3e; background: rgba(30,142,62,0.12); }
 .thread-status.resolved { color: var(--ink-3); background: var(--rule); }
-@media (prefers-color-scheme: dark) { .thread-status.active { color: #5bd07f; background: rgba(91,208,127,0.15); } }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .thread-status.active { color: #5bd07f; background: rgba(91,208,127,0.15); } }
+:root[data-theme="dark"] .thread-status.active { color: #5bd07f; background: rgba(91,208,127,0.15); }
+
 
 .thread-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .thread-head h2 { font-family: var(--serif); font-size: 23px; font-weight: 700; letter-spacing: -0.3px; }
@@ -2894,7 +2910,9 @@ button.cal-open:active { background: var(--rule); }
 .cal-title { font-size: 14.5px; font-weight: 600; line-height: 1.35; }
 .cal-meta { font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
 .cal-outcome { font-size: 12px; color: #1e8e3e; margin-top: 5px; line-height: 1.45; }
-@media (prefers-color-scheme: dark) { .cal-outcome { color: #5bd07f; } }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .cal-outcome { color: #5bd07f; } }
+:root[data-theme="dark"] .cal-outcome { color: #5bd07f; }
+
 .cal-star {
   flex: none;
   align-self: center;
@@ -3188,12 +3206,10 @@ button.cal-open:active { background: var(--rule); }
 .mm-v { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; font-variant-numeric: tabular-nums; margin-top: 2px; }
 .mm-sub { font-size: 10.5px; color: var(--ink-3); margin-top: 1px; }
 
-@media (prefers-color-scheme: dark) {
-  .pt-chg.good, .pt-spark-line.spark-good, .pmk-v.good, .pmk-yoy.good, .dhs-v.good { color: #5bd07f; }
-  .pt-chg.bad, .pt-spark-line.spark-bad, .pmk-v.bad, .pmk-yoy.bad, .dhs-v.bad { color: #ff7b6e; }
-  .pulse-verdict.easy { border-left-color: #5bd07f; }
-  .pulse-verdict.tight { border-left-color: #ff7b6e; }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .pt-chg.good, :root:not([data-theme="light"]) .pt-spark-line.spark-good, :root:not([data-theme="light"]) .pmk-v.good, :root:not([data-theme="light"]) .pmk-yoy.good, :root:not([data-theme="light"]) .dhs-v.good { color: #5bd07f; }:root:not([data-theme="light"]) .pt-chg.bad, :root:not([data-theme="light"]) .pt-spark-line.spark-bad, :root:not([data-theme="light"]) .pmk-v.bad, :root:not([data-theme="light"]) .pmk-yoy.bad, :root:not([data-theme="light"]) .dhs-v.bad { color: #ff7b6e; }:root:not([data-theme="light"]) .pulse-verdict.easy { border-left-color: #5bd07f; }:root:not([data-theme="light"]) .pulse-verdict.tight { border-left-color: #ff7b6e; }
 }
+:root[data-theme="dark"] .pt-chg.good, :root[data-theme="dark"] .pt-spark-line.spark-good, :root[data-theme="dark"] .pmk-v.good, :root[data-theme="dark"] .pmk-yoy.good, :root[data-theme="dark"] .dhs-v.good { color: #5bd07f; }:root[data-theme="dark"] .pt-chg.bad, :root[data-theme="dark"] .pt-spark-line.spark-bad, :root[data-theme="dark"] .pmk-v.bad, :root[data-theme="dark"] .pmk-yoy.bad, :root[data-theme="dark"] .dhs-v.bad { color: #ff7b6e; }:root[data-theme="dark"] .pulse-verdict.easy { border-left-color: #5bd07f; }:root[data-theme="dark"] .pulse-verdict.tight { border-left-color: #ff7b6e; }
+
 
 /* ============================================================
    Mapbox GL — popup + surface theming
@@ -3223,11 +3239,10 @@ button.cal-open:active { background: var(--rule); }
 }
 .mapboxgl-ctrl-group { background: var(--box) !important; }
 .mapboxgl-ctrl-group button + button { border-top: 1px solid var(--rule) !important; }
-@media (prefers-color-scheme: dark) {
-  .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon { filter: invert(1); }
-  .mapboxgl-ctrl-attrib { background: rgba(16,18,20,0.7) !important; }
-  .mapboxgl-ctrl-attrib a { color: var(--ink-3) !important; }
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"]) .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon { filter: invert(1); }:root:not([data-theme="light"]) .mapboxgl-ctrl-attrib { background: rgba(16,18,20,0.7) !important; }:root:not([data-theme="light"]) .mapboxgl-ctrl-attrib a { color: var(--ink-3) !important; }
 }
+:root[data-theme="dark"] .mapboxgl-ctrl-group button .mapboxgl-ctrl-icon { filter: invert(1); }:root[data-theme="dark"] .mapboxgl-ctrl-attrib { background: rgba(16,18,20,0.7) !important; }:root[data-theme="dark"] .mapboxgl-ctrl-attrib a { color: var(--ink-3) !important; }
+
 
 /* market-page link inside comps / cap-rate board sections */
 .cm-market-link {
@@ -3307,8 +3322,7 @@ button.cal-open:active { background: var(--rule); }
   --brief-tint: color-mix(in srgb, var(--accent) 8%, var(--box));
   --brief-bd: color-mix(in srgb, var(--accent) 26%, transparent);
 }
-@media (prefers-color-scheme: dark) {
-  :root[data-look="updated"] {
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"])[data-look="updated"] {
     --bar: rgba(14, 18, 26, 0.62);
     --bar-bd: rgba(255, 255, 255, 0.12);
     --bar-rim: rgba(255, 255, 255, 0.14);
@@ -3316,6 +3330,14 @@ button.cal-open:active { background: var(--rule); }
     --brief-bd: color-mix(in srgb, var(--accent) 20%, transparent);
   }
 }
+:root[data-theme="dark"][data-look="updated"] {
+    --bar: rgba(14, 18, 26, 0.62);
+    --bar-bd: rgba(255, 255, 255, 0.12);
+    --bar-rim: rgba(255, 255, 255, 0.14);
+    --brief-tint: color-mix(in srgb, var(--accent) 9%, var(--box));
+    --brief-bd: color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+
 :root[data-theme="dark"][data-look="updated"] {
   --bar: rgba(14, 18, 26, 0.62);
   --bar-bd: rgba(255, 255, 255, 0.12);
@@ -3340,14 +3362,20 @@ button.cal-open:active { background: var(--rule); }
   --blob-rim: rgba(255, 255, 255, 0.55);
   --blob-elev: 0 3px 9px -3px rgba(28, 40, 64, 0.28);
 }
-@media (prefers-color-scheme: dark) {
-  :root[data-look="updated"] {
+@media (prefers-color-scheme: dark) {:root:not([data-theme="light"])[data-look="updated"] {
     --card-rim: rgba(255, 255, 255, 0.07);
     --card-bd: rgba(255, 255, 255, 0.06);
     --blob-rim: rgba(255, 255, 255, 0.22);
     --blob-elev: 0 0 12px -1px color-mix(in srgb, var(--accent) 40%, transparent);
   }
 }
+:root[data-theme="dark"][data-look="updated"] {
+    --card-rim: rgba(255, 255, 255, 0.07);
+    --card-bd: rgba(255, 255, 255, 0.06);
+    --blob-rim: rgba(255, 255, 255, 0.22);
+    --blob-elev: 0 0 12px -1px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
 :root[data-theme="dark"][data-look="updated"] {
   --card-rim: rgba(255, 255, 255, 0.07);
   --card-bd: rgba(255, 255, 255, 0.06);
@@ -3615,6 +3643,11 @@ button.cal-open:active { background: var(--rule); }
 :root[data-look="updated"] .rate-tile { border-radius: 12px; }
 
 /* segmented Legacy/Updated toggle on the status page */
+.seg-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--ink-3); margin: 12px 0 6px;
+}
+.seg-label:first-child { margin-top: 2px; }
 .seg-toggle {
   display: inline-flex;
   padding: 3px;
