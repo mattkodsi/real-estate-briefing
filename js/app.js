@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v133";
+const APP_VERSION = "v134";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -343,12 +343,18 @@ async function init() {
   // close, tracking the finger the whole way (springs back if you let go early)
   const reader = $("reader");
   let rt = null;
+  const READER_EDGE = 28;                                  // left-edge zone → "back out to briefing"
   reader.addEventListener("touchstart", (e) => {
     if (e.touches.length !== 1) { rt = null; return; }
-    rt = { x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, dy: 0, axis: null };
+    const x = e.touches[0].clientX;
+    // a swipe that STARTS at the far-left edge is an exit gesture (iOS back); a
+    // swipe that starts in the content is article navigation. This spatial zoning
+    // is what keeps "leave the article" and "flip to the next article" from ever
+    // firing on the same drag.
+    rt = { x, y: e.touches[0].clientY, dx: 0, dy: 0, axis: null, edge: x <= READER_EDGE };
   }, { passive: true });
   const READER_NAV = 55;                                   // px to commit to prev/next
-  const readerExitT = () => Math.min(window.innerWidth * 0.45, 230);  // a "grounded" left drag = exit
+  const READER_EXIT = 70;                                  // px of edge-drag to commit to exit
   reader.addEventListener("touchmove", (e) => {
     if (!rt) return;
     if (peekActive) return; // a hold-peek (inline link) owns the finger — stand down
@@ -368,25 +374,30 @@ async function init() {
       reader.style.transform = `translateY(${y * 0.6}px)`;
       reader.style.opacity = "1";
     } else if (rt.axis === "x") {
-      // live finger-tracking: the story slides horizontally under your finger, so
-      // it feels alive rather than dead-then-snap. Left = next / (grounded) exit,
-      // right = previous. Rubber-band when there's nothing that way to pull toward.
       e.preventDefault();
-      const nav = state.readerNav;
-      const hasPrev = nav && nav.idx > 0;
-      let d = rt.dx;
-      if (d > 0 && !hasPrev) d *= 0.32;         // right with no previous → soft wall
       reader.style.transition = "none";
-      reader.style.transform = `translateX(${d * 0.9}px)`;
-      // as a leftward drag passes the exit threshold, fade a hair so "let go = exit
-      // to the briefing" is felt, not guessed
-      const over = -d - readerExitT();
-      reader.style.opacity = (d < 0 && over > 0) ? String(Math.max(0.55, 1 - over / 320)) : "1";
+      if (rt.edge) {
+        // EXIT zone (started at the left edge): only a rightward drag counts —
+        // the story slides right to reveal the briefing, fading as it commits.
+        const d = Math.max(0, rt.dx);
+        reader.style.transform = `translateX(${d}px)`;
+        reader.style.opacity = String(Math.max(0.55, 1 - d / (window.innerWidth * 0.9)));
+      } else {
+        // NAVIGATION zone (content): left = next, right = previous; rubber-band at
+        // the ends so a wall is felt, and NEVER exits — that's the edge zone's job.
+        const nav = state.readerNav;
+        const hasNext = !!(nav && nav.list[nav.idx + 1]);
+        const hasPrev = !!(nav && nav.idx > 0);
+        let d = rt.dx;
+        if ((d < 0 && !hasNext) || (d > 0 && !hasPrev)) d *= 0.3;   // soft wall
+        reader.style.transform = `translateX(${d * 0.9}px)`;
+        reader.style.opacity = "1";
+      }
     }
   }, { passive: false });
   const readerTouchEnd = () => {
     if (!rt) return;
-    const { axis, dx, dy } = rt;
+    const { axis, dx, dy, edge } = rt;
     rt = null;
     if (axis === "x") {
       const adx = Math.abs(dx);
@@ -394,16 +405,16 @@ async function init() {
       const hasNext = !!(nav && nav.list[nav.idx + 1]);
       const hasPrev = !!(nav && nav.idx > 0);
       reader.style.opacity = "";
-      if (dx < 0) {                             // swiped LEFT
-        // grounded (long) left, OR a left at the end of the set → exit to briefing
-        if (adx >= readerExitT() || (!hasNext && adx > READER_NAV)) return readerSwipeExit();
-        if (hasNext && adx > READER_NAV) return readerSwipeStep(1);   // → next
-      } else if (hasPrev && adx > READER_NAV) { // swiped RIGHT → previous
-        return readerSwipeStep(-1);
+      if (edge) {                               // EXIT zone: rightward drag off the left edge
+        if (dx > READER_EXIT) return readerSwipeExit();
+      } else if (dx < 0 && hasNext && adx > READER_NAV) {
+        return readerSwipeStep(1);              // content swipe left → next
+      } else if (dx > 0 && hasPrev && adx > READER_NAV) {
+        return readerSwipeStep(-1);             // content swipe right → previous
       }
-      // under threshold (or nothing that way) → glide back to center
+      // under threshold (or a wall) → glide back to center
       reader.style.transition = "transform .3s cubic-bezier(.22,1.08,.36,1)";
-      reader.style.transform = "";
+      reader.style.transform = ""; reader.style.opacity = "";
     } else if (axis === "close") {
       if (dy > 175) {
         // committed: NOW it fades, entirely while sliding off — never before
@@ -4941,12 +4952,12 @@ function readerSwipeStep(delta) {
   }, 148);
 }
 
-// a "grounded" left swipe (or a left swipe at the end of the set) slides the story
-// off to the left and returns to the briefing — the horizontal cousin of pull-down.
+// a left-edge swipe (or pull-down) returns to the briefing: the story slides off
+// to the RIGHT to reveal the feed underneath — the iOS "back" direction.
 function readerSwipeExit() {
   const reader = $("reader");
   reader.style.transition = "transform .2s ease, opacity .2s ease";
-  reader.style.transform = "translateX(-100%)";
+  reader.style.transform = "translateX(100%)";
   reader.style.opacity = "0";
   setTimeout(() => {
     closeReaderNav();
