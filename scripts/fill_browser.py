@@ -172,10 +172,30 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
                 # the story's text is fine — never flag it blocked, just retry next run
                 print(f"  · {sid:<40} image fetch missed (text intact)")
             else:
-                s["sourceBlocked"] = True  # app: card taps through to the source
-                failed.append((sid, f"{res.get('words', 0)} words"
-                                    + (" (challenge held)" if res.get("blocked") else "")))
-                print(f"  ✗ {sid:<40} {res.get('words', 0)} words")
+                # Playwright got blocked/short. Before giving up, try the plain
+                # HTTP + Supabase-proxy path (fetch_article.extract): sites like TRD
+                # challenge the headless BROWSER from GitHub's IPs but serve the
+                # article to a plain fetch through the proxy's clean egress, so the
+                # "simpler" path recovers what the browser can't.
+                alt = None
+                try:
+                    alt = fetch_article.extract(s["url"])
+                except Exception:  # noqa: BLE001
+                    alt = None
+                if (alt and alt.get("ok")
+                        and fill_content._words(alt.get("html")) > have
+                        and not fetch_article.title_mismatch(s.get("title", ""), alt)):
+                    s["content"] = alt["html"]
+                    if not s.get("image") and alt.get("image"):
+                        s["image"] = alt["image"]
+                    s.pop("sourceBlocked", None)
+                    filled.append(sid)
+                    print(f"  ✓ {sid:<40} {alt['words']} words (http fallback)")
+                else:
+                    s["sourceBlocked"] = True  # app: card taps through to the source
+                    failed.append((sid, f"{res.get('words', 0)} words"
+                                        + (" (challenge held)" if res.get("blocked") else "")))
+                    print(f"  ✗ {sid:<40} {res.get('words', 0)} words")
         except Exception as e:  # noqa: BLE001 - one bad page never stops the loop
             failed.append((sid, str(e)[:70]))
             print(f"  ✗ {sid:<40} {str(e)[:70]}")
