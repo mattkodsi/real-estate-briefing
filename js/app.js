@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v140";
+const APP_VERSION = "v141";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -8168,55 +8168,52 @@ async function renderStatus() {
   head.innerHTML = `<h2>System status</h2><p>The pipeline behind the briefing — content filling, sources, and sessions.</p>`;
   wrap.appendChild(head);
 
-  // Appearance — the refreshed look (default) vs the legacy look (per reader)
+  // Appearance — theme (light/dark/system) + layout (modern/legacy), per reader.
+  // Each control sits on its own row: a quiet label at left, segmented control at
+  // right — so the uppercase "APPEARANCE" header stays the dominant label and the
+  // row labels read as items under it (not competing same-style labels).
   const lookCard = statusCard("Appearance");
-
-  // Theme: light / dark / system (per reader)
-  const themeLabel = document.createElement("div");
-  themeLabel.className = "seg-label";
-  themeLabel.textContent = "Theme";
-  lookCard.appendChild(themeLabel);
-  const themeSeg = document.createElement("div");
-  themeSeg.className = "seg-toggle";
-  themeSeg.setAttribute("role", "group");
-  themeSeg.setAttribute("aria-label", "Theme");
-  const currentTheme = pref("theme", "system");
-  for (const [val, label] of [["light", "Light"], ["dark", "Dark"], ["system", "System"]]) {
-    const b = document.createElement("button");
-    b.className = "seg-opt" + (currentTheme === val ? " on" : "");
-    b.textContent = label;
-    b.addEventListener("click", () => {
-      setPref("theme", val);
-      applyTheme();
-      for (const x of themeSeg.querySelectorAll(".seg-opt")) x.classList.remove("on");
-      b.classList.add("on");
-    });
-    themeSeg.appendChild(b);
+  const ICON = {
+    sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+    moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+    monitor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+  };
+  function segRow(labelText, ariaLabel, options, curVal, onPick) {
+    const row = document.createElement("div");
+    row.className = "seg-row";
+    const lab = document.createElement("span");
+    lab.className = "seg-rowlabel";
+    lab.textContent = labelText;
+    row.appendChild(lab);
+    const seg = document.createElement("div");
+    seg.className = "seg-toggle";
+    seg.setAttribute("role", "group");
+    seg.setAttribute("aria-label", ariaLabel);
+    for (const opt of options) {
+      const b = document.createElement("button");
+      b.className = "seg-opt" + (curVal === opt.val ? " on" : "");
+      b.innerHTML = (opt.icon ? ICON[opt.icon] : "") + `<span>${opt.label}</span>`;
+      b.setAttribute("aria-label", opt.label);
+      b.addEventListener("click", () => {
+        onPick(opt.val);
+        for (const x of seg.querySelectorAll(".seg-opt")) x.classList.remove("on");
+        b.classList.add("on");
+      });
+      seg.appendChild(b);
+    }
+    row.appendChild(seg);
+    lookCard.appendChild(row);
   }
-  lookCard.appendChild(themeSeg);
-
-  const lookLabel = document.createElement("div");
-  lookLabel.className = "seg-label";
-  lookLabel.textContent = "Layout";
-  lookCard.appendChild(lookLabel);
-  const seg = document.createElement("div");
-  seg.className = "seg-toggle";
-  seg.setAttribute("role", "group");
-  seg.setAttribute("aria-label", "App appearance");
-  const currentLook = pref("look", "updated") === "legacy" ? "legacy" : "updated";
-  for (const [val, label] of [["updated", "Updated look"], ["legacy", "Legacy"]]) {
-    const b = document.createElement("button");
-    b.className = "seg-opt" + (currentLook === val ? " on" : "");
-    b.textContent = label;
-    b.addEventListener("click", () => {
-      setPref("look", val);
-      applyLook();
-      for (const x of seg.querySelectorAll(".seg-opt")) x.classList.remove("on");
-      b.classList.add("on");
-    });
-    seg.appendChild(b);
-  }
-  lookCard.appendChild(seg);
+  segRow("Theme", "Theme", [
+    { val: "light", label: "Light", icon: "sun" },
+    { val: "dark", label: "Dark", icon: "moon" },
+    { val: "system", label: "System", icon: "monitor" },
+  ], pref("theme", "system"), (val) => { setPref("theme", val); applyTheme(); });
+  segRow("Layout", "App layout", [
+    { val: "updated", label: "Modern" },
+    { val: "legacy", label: "Legacy" },
+  ], (pref("look", "updated") === "legacy" ? "legacy" : "updated"),
+     (val) => { setPref("look", val); applyLook(); });
   wrap.appendChild(lookCard);
 
   const latest = state.dates[state.dates.length - 1];

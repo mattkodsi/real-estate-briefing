@@ -3642,12 +3642,22 @@ button.cal-open:active { background: var(--rule); }
 :root[data-look="updated"] .pulse-tile,
 :root[data-look="updated"] .rate-tile { border-radius: 12px; }
 
-/* segmented Legacy/Updated toggle on the status page */
-.seg-label {
-  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--ink-3); margin: 12px 0 6px;
+/* Appearance card: label-left / segmented-control-right rows on the status page */
+.seg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  margin-top: 13px;
 }
-.seg-label:first-child { margin-top: 2px; }
+.seg-row:first-of-type { margin-top: 4px; }
+.seg-rowlabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
 .seg-toggle {
   display: inline-flex;
   padding: 3px;
@@ -3663,11 +3673,15 @@ button.cal-open:active { background: var(--rule); }
   background: transparent;
   border: none;
   border-radius: 8px;
-  padding: 7px 16px;
+  padding: 6px 11px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   transition: background 0.15s ease, color 0.15s ease;
 }
+.seg-opt svg { width: 14px; height: 14px; display: block; flex: none; }
 .seg-opt.on { background: var(--box); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
 
 /* older phones with no backdrop-filter: solid bars so nothing renders as an
