@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v134";
+const APP_VERSION = "v135";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -4931,25 +4931,28 @@ function readerStep(delta) {
   flashToast(`${next.section ? next.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`);
 }
 
-// swipe-driven step: slide the current story off in the swipe direction, swap, and
-// let openReader glide the new one in from the opposite side (readerEnterFrom). The
-// entrance lives in openReader so it runs AFTER the content rebuild, never racing it.
+// swipe-driven step: an elegant cross-dissolve. The reader STAYS full-bleed and
+// opaque the whole time (never sliding off to expose the briefing underneath) —
+// the current story settles/fades out, the content swaps, then the next fades in
+// (the entrance lives in openReader so it runs AFTER the rebuild, never racing it).
 function readerSwipeStep(delta) {
   const nav = state.readerNav;
   const target = nav && nav.idx >= 0 && nav.list[nav.idx + delta];
   if (!target) return;
   const reader = $("reader");
-  const outX = delta > 0 ? -100 : 100;        // next → out left; prev → out right
-  readerEnterFrom = delta > 0 ? 100 : -100;   // new story enters from the far side
+  readerCrossIn = true;
   const label = `${target.section ? target.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`;
-  reader.style.transition = "transform .16s ease-in, opacity .16s ease-in";
-  reader.style.transform = `translateX(${outX}%)`;
+  // fade out in place — translateX returns to 0 (undoing any drag) so no edge of
+  // the feed is ever revealed. Opacity-only: any translate/scale<1 would show a
+  // strip of the briefing, which is exactly what we're eliminating.
+  reader.style.transition = "opacity .15s ease, transform .15s ease";
+  reader.style.transform = "translateX(0) scale(1.015)";   // scale ≥1 → never bares the feed
   reader.style.opacity = "0";
   setTimeout(() => {
     readerStepFlash = true;
     readerGo(nav.date, target.id);
     flashToast(label);
-  }, 148);
+  }, 135);
 }
 
 // a left-edge swipe (or pull-down) returns to the briefing: the story slides off
@@ -5062,7 +5065,7 @@ const readerScrollPos = {};             // date/id -> scrollTop (session memory)
 let readerPrevSection = null;           // section of the story we came from
 let readerStepFlash = false;            // set by readerStep so a fresh open doesn't flash
 let readerSlideIn = false;              // set by a peek fling: slide the reader up over the sheet
-let readerEnterFrom = null;             // set by a swipe step: side (±100) the new story glides in from
+let readerCrossIn = false;              // set by a swipe step: fade the new story in (cross-dissolve)
 let flashTimer = null;
 
 // remember scroll position and update "~N min left" as you read
@@ -5273,20 +5276,20 @@ async function openReaderRoute(date, id) {
       document.body.classList.remove("sheet-open");
       reader.style.transition = ""; reader.style.transform = ""; reader.style.zIndex = "";
     }, 440);
-  } else if (readerEnterFrom !== null) {
-    // arrived via a horizontal swipe-step: the outgoing story already slid off, so
-    // glide THIS one in from the far side. Runs here (post-rebuild) so the content
-    // is already the new story — no mid-slide swap flash.
-    const fromX = readerEnterFrom;
-    readerEnterFrom = null;
-    reader.style.opacity = "1";
+  } else if (readerCrossIn) {
+    // arrived via a swipe-step: the outgoing story faded out in place, so fade THIS
+    // one in (cross-dissolve). Runs here (post-rebuild) so the content is already
+    // the new story, and the reader never left full-bleed — the feed never shows.
+    readerCrossIn = false;
     reader.style.transition = "none";
-    reader.style.transform = `translateX(${fromX}%)`;
+    reader.style.transform = "scale(1.015)";   // continue from the fade-out scale…
+    reader.style.opacity = "0";
     requestAnimationFrame(() => {
-      reader.style.transition = "transform .24s cubic-bezier(.2,.85,.25,1)";
-      reader.style.transform = "translateX(0)";
+      reader.style.transition = "opacity .22s ease, transform .22s ease";
+      reader.style.opacity = "1";
+      reader.style.transform = "scale(1)";      // …and settle to rest as it fades in
     });
-    setTimeout(() => { reader.style.transition = ""; reader.style.transform = ""; }, 260);
+    setTimeout(() => { reader.style.transition = ""; reader.style.opacity = ""; reader.style.transform = ""; }, 240);
   } else {
     reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; // clear pull-to-close residue
   }
