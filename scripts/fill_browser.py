@@ -258,6 +258,15 @@ def main() -> int:
 
     fill_content.record_heartbeat(dates[0], total_filled, total_failed, "")
     print(f"SUMMARY: filled {total_filled}, {total_failed} still missing across {len(dates)} day(s)")
+
+    # Source-health watchdog: after filling, check per-publisher coverage and
+    # PROACTIVELY alert the owner (web push + in-app banner) if a subscriber cookie
+    # expired or a fetch method collapsed. Best-effort — never fails the fill.
+    try:
+        import monitor_sources
+        monitor_sources.main()
+    except Exception as e:  # noqa: BLE001
+        print(f"(monitor_sources skipped: {e})")
     return 0
 
 
