@@ -2040,6 +2040,14 @@ button.heat-cell:active { outline: 1.5px solid var(--ink); }
   padding: 14px 16px;
   margin-bottom: 14px;
 }
+/* brief highlight when deep-linked from the cookie-expiry push */
+.status-card.status-flash {
+  animation: statusFlash 1.8s ease;
+}
+@keyframes statusFlash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; border-color: var(--rule); }
+  15%, 55% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); border-color: var(--accent); }
+}
 .status-title {
   font-size: 10.5px;
   font-weight: 700;

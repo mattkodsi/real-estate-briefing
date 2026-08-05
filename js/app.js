@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v135";
+const APP_VERSION = "v136";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -383,14 +383,10 @@ async function init() {
         reader.style.transform = `translateX(${d}px)`;
         reader.style.opacity = String(Math.max(0.55, 1 - d / (window.innerWidth * 0.9)));
       } else {
-        // NAVIGATION zone (content): left = next, right = previous; rubber-band at
-        // the ends so a wall is felt, and NEVER exits — that's the edge zone's job.
-        const nav = state.readerNav;
-        const hasNext = !!(nav && nav.list[nav.idx + 1]);
-        const hasPrev = !!(nav && nav.idx > 0);
-        let d = rt.dx;
-        if ((d < 0 && !hasNext) || (d > 0 && !hasPrev)) d *= 0.3;   // soft wall
-        reader.style.transform = `translateX(${d * 0.9}px)`;
+        // NAVIGATION zone (content): keep the single reader STATIC and fully opaque
+        // while dragging — translating it here would bare the briefing behind it.
+        // On release, an opaque two-panel carousel does the actual move.
+        reader.style.transform = "";
         reader.style.opacity = "1";
       }
     }
@@ -1107,9 +1103,20 @@ function route() {
     state.pulseGroup = "rates";
     location.replace("#/desk/pulse");
     return;
-  } else if (h === "#/status") {
+  } else if (h === "#/status" || h.startsWith("#/status?")) {
     showView("status");
-    renderStatus();
+    const focus = new URLSearchParams(h.split("?")[1] || "").get("focus");
+    renderStatus().then(() => {
+      // a cookie-expiry push deep-links here focused on the session section
+      if (focus === "connections") {
+        const el = document.getElementById("sessions-card");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.add("status-flash");
+          setTimeout(() => el.classList.remove("status-flash"), 1800);
+        }
+      }
+    });
   } else if (h === "#/alerts") {
     showView("alerts");
     renderAlerts();
@@ -4940,19 +4947,35 @@ function readerSwipeStep(delta) {
   const target = nav && nav.idx >= 0 && nav.list[nav.idx + delta];
   if (!target) return;
   const reader = $("reader");
-  readerCrossIn = true;
+  document.getElementById("reader-ghost")?.remove();   // clear a straggler (rapid swipes)
   const label = `${target.section ? target.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`;
-  // fade out in place — translateX returns to 0 (undoing any drag) so no edge of
-  // the feed is ever revealed. Opacity-only: any translate/scale<1 would show a
-  // strip of the briefing, which is exactly what we're eliminating.
-  reader.style.transition = "opacity .15s ease, transform .15s ease";
-  reader.style.transform = "translateX(0) scale(1.015)";   // scale ≥1 → never bares the feed
-  reader.style.opacity = "0";
-  setTimeout(() => {
-    readerStepFlash = true;
-    readerGo(nav.date, target.id);
-    flashToast(label);
-  }, 135);
+  // OPAQUE two-panel slide: freeze the CURRENT article as a full-opacity clone
+  // ("ghost") pinned exactly over the reader. openReader then renders the NEW
+  // article into #reader off-screen and slides it in while the ghost slides out —
+  // both panels cover the whole screen the entire time, so the briefing behind is
+  // NEVER revealed and there is no fade. (See the readerSlideDir branch in openReader.)
+  const cs = getComputedStyle(reader);
+  const ghost = reader.cloneNode(true);
+  ghost.id = "reader-ghost";
+  ghost.removeAttribute("hidden");
+  // the clone loses #reader's id-based CSS, so replicate its box inline
+  for (const p of ["position", "top", "left", "right", "bottom", "width", "height",
+                   "zIndex", "backgroundColor", "backgroundImage", "padding",
+                   "boxSizing", "overflowX", "overflowY", "borderRadius", "color", "font"]) {
+    ghost.style[p] = cs[p];
+  }
+  ghost.style.margin = "0";
+  ghost.style.transition = "none";
+  ghost.style.transform = "translateX(0)";
+  ghost.style.opacity = "1";
+  ghost.style.pointerEvents = "none";
+  document.body.appendChild(ghost);
+  ghost.scrollTop = reader.scrollTop;   // match the frozen scroll position exactly
+  readerGhost = ghost;
+  readerSlideDir = delta;
+  readerStepFlash = true;
+  readerGo(nav.date, target.id);        // → openReader renders + runs the slide
+  flashToast(label);
 }
 
 // a left-edge swipe (or pull-down) returns to the briefing: the story slides off
@@ -5065,7 +5088,8 @@ const readerScrollPos = {};             // date/id -> scrollTop (session memory)
 let readerPrevSection = null;           // section of the story we came from
 let readerStepFlash = false;            // set by readerStep so a fresh open doesn't flash
 let readerSlideIn = false;              // set by a peek fling: slide the reader up over the sheet
-let readerCrossIn = false;              // set by a swipe step: fade the new story in (cross-dissolve)
+let readerGhost = null;                 // opaque clone of the outgoing story during a swipe-slide
+let readerSlideDir = 0;                 // +1 next / -1 prev: which way the two-panel slide runs
 let flashTimer = null;
 
 // remember scroll position and update "~N min left" as you read
@@ -5276,20 +5300,26 @@ async function openReaderRoute(date, id) {
       document.body.classList.remove("sheet-open");
       reader.style.transition = ""; reader.style.transform = ""; reader.style.zIndex = "";
     }, 440);
-  } else if (readerCrossIn) {
-    // arrived via a swipe-step: the outgoing story faded out in place, so fade THIS
-    // one in (cross-dissolve). Runs here (post-rebuild) so the content is already
-    // the new story, and the reader never left full-bleed — the feed never shows.
-    readerCrossIn = false;
+  } else if (readerSlideDir) {
+    // arrived via a swipe-step: the OUTGOING article is frozen as an opaque ghost
+    // over the screen. Bring THIS (new) article in from the far side while the
+    // ghost slides out the opposite way — both full-opacity, always covering the
+    // full screen, so the briefing is never bared and nothing fades.
+    const dir = readerSlideDir; readerSlideDir = 0;
+    const ghost = readerGhost; readerGhost = null;
+    reader.style.opacity = "1";
     reader.style.transition = "none";
-    reader.style.transform = "scale(1.015)";   // continue from the fade-out scale…
-    reader.style.opacity = "0";
+    reader.style.transform = `translateX(${dir > 0 ? 100 : -100}%)`;   // start off-screen
     requestAnimationFrame(() => {
-      reader.style.transition = "opacity .22s ease, transform .22s ease";
-      reader.style.opacity = "1";
-      reader.style.transform = "scale(1)";      // …and settle to rest as it fades in
+      const ease = "transform .34s cubic-bezier(.33, 0, .12, 1)";
+      reader.style.transition = ease;
+      reader.style.transform = "translateX(0)";
+      if (ghost) { ghost.style.transition = ease; ghost.style.transform = `translateX(${dir > 0 ? -100 : 100}%)`; }
     });
-    setTimeout(() => { reader.style.transition = ""; reader.style.opacity = ""; reader.style.transform = ""; }, 240);
+    setTimeout(() => {
+      reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = "";
+      if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    }, 360);
   } else {
     reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; // clear pull-to-close residue
   }
@@ -5908,6 +5938,8 @@ async function openCanopyPeek(slug, originRect) {
 }
 
 function closeReaderNav() {
+  document.getElementById("reader-ghost")?.remove();   // never leave a slide clone behind
+  readerGhost = null; readerSlideDir = 0;
   if (history.length > 1) history.back();
   else location.hash = "/";
 }
@@ -8228,6 +8260,7 @@ async function renderStatus() {
   wrap.appendChild(srcCard);
 
   const sysCard = statusCard("Sessions & rates");
+  sysCard.id = "sessions-card";   // deep-link target for the cookie-expiry push
   for (const site of SESSION_SITES) {
     const label = site.label + " login";
     const row = connMeta.find((r) => r.id === "conn_" + site.domain);

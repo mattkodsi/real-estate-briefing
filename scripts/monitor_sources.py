@@ -100,11 +100,16 @@ def push_admin(title, body):
         print(f"  [--no-push] would push: {title} — {body}")
         return
     try:
+        # deep-link straight to the diagnostics page, focused on the cookie section
         _post("functions/v1/push-send", {"profiles": [OWNER], "title": title,
-              "body": body, "url": "#/status", "tag": "admin-health"})
+              "body": body, "url": "#/status?focus=connections", "tag": "admin-health"})
         print(f"  → pushed admin alert: {title}")
     except Exception as e:  # noqa: BLE001
         print(f"  (push failed: {e})")
+
+
+def _site_label(dom):
+    return {"therealdeal.com": "The Real Deal", "inman.com": "Inman"}.get(dom, dom)
 
 
 def main():
@@ -127,11 +132,9 @@ def main():
         rate = fil / tot
         if rate < COLLAPSE_RATE:
             if dom in SESSION_SITES:
-                problems.append((f"session:{dom}",
-                                 f"{SESSION_SITES[dom]} ({fil}/{tot} filled)"))
+                problems.append((f"session:{dom}", dom))
             elif dom in RELIABLE_SITES:
-                problems.append((f"method:{dom}",
-                                 f"{dom} fetch collapsed ({fil}/{tot}) — a method broke"))
+                problems.append((f"method:{dom}", dom))
 
     # report
     print(f"Source health over {dates[-1]}..{dates[0]}:")
@@ -175,11 +178,11 @@ def main():
         session_hit = [m for k, m in problems if k.startswith("session:") and k in fresh]
         method_hit = [m for k, m in problems if k.startswith("method:") and k in fresh]
         if session_hit:
-            push_admin("⚠ Subscriber session expired",
-                       session_hit[0] + " — articles are going text-less until you refresh it.")
+            push_admin(f"⚠ {_site_label(session_hit[0])} session expired",
+                       "Tap to reconnect")
         if method_hit:
-            push_admin("⚠ Article fetching is failing",
-                       method_hit[0] + ". Check the pipeline / GitHub Actions.")
+            push_admin(f"⚠ {_site_label(method_hit[0])} isn't loading articles",
+                       "Tap to check")
     else:
         print("  (already alerted — no new push)")
     return 0
