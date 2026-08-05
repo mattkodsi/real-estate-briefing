@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v136";
+const APP_VERSION = "v137";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -7343,6 +7343,21 @@ function statusRow(card, label, value, cls) {
   return row;
 }
 
+// full-width labeled block — for prose too long for a two-column row (e.g. Notes)
+function statusBlock(card, label, text) {
+  const block = document.createElement("div");
+  block.className = "status-block";
+  const l = document.createElement("div");
+  l.className = "status-block-label";
+  l.textContent = label;
+  const b = document.createElement("div");
+  b.className = "status-block-body";
+  b.textContent = text;
+  block.append(l, b);
+  card.appendChild(block);
+  return block;
+}
+
 function fmtAge(min) {
   if (!isFinite(min)) return "never";
   if (min < 60) return `${Math.round(min)} min ago`;
@@ -8185,7 +8200,7 @@ async function renderStatus() {
     statusRow(briefingCard, "Last compiled", day.generatedAt
       ? new Date(day.generatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—");
     statusRow(briefingCard, "Stories", `${stories.length} (${stories.filter((s) => s.featured).length} top · ${stories.filter((s) => s.brief).length} briefs)`);
-    if (day.notes) statusRow(briefingCard, "Notes", day.notes);
+    if (day.notes) statusBlock(briefingCard, "Notes", day.notes);
   } else {
     statusRow(briefingCard, "Date", "no briefing loaded", "warn");
   }
@@ -8261,6 +8276,17 @@ async function renderStatus() {
 
   const sysCard = statusCard("Sessions & rates");
   sysCard.id = "sessions-card";   // deep-link target for the cookie-expiry push
+
+  // Proactive-monitoring status: the source-health watchdog runs after every fill
+  // and pushes the owner the moment a login expires. Show that it's live.
+  let health = null;
+  try { const h = await sb("app_status?id=eq.source_health&select=data"); health = h[0]?.data || null; } catch { /* offline */ }
+  const probs = (health?.problems || []);
+  statusRow(sysCard, "Session monitor",
+    probs.length ? `⚠ ${probs.length} issue${probs.length === 1 ? "" : "s"}`
+      : health?.checkedAt ? `active · checked ${fmtAge(ageMin(health.checkedAt))}` : "active",
+    probs.length ? "bad" : "ok");
+
   for (const site of SESSION_SITES) {
     const label = site.label + " login";
     const row = connMeta.find((r) => r.id === "conn_" + site.domain);
@@ -8280,7 +8306,9 @@ async function renderStatus() {
   }
   const sNote = document.createElement("p");
   sNote.className = "status-note";
-  sNote.textContent = "A stored login isn't a guarantee of coverage — most subscriber articles ship their full text without one. TRD Data pages are a separate paid tier no login unlocks; they read at source. Watch \"Full text in-app\" above for the real picture.";
+  sNote.textContent = probs.length
+    ? "⚠ " + probs.join("; ") + ". The monitor already pushed you — reconnect above."
+    : "Auto-checked after every fill (~30 min). If a subscriber login expires you'll get a push and this turns red — you don't have to watch it. (A stored cookie isn't proof of coverage: most articles ship full text without one, and Bisnow fetches free.)";
   sysCard.appendChild(sNote);
   const rAge = ageMin(ratesAt);
   statusRow(sysCard, "Rates cache", fmtAge(rAge), rAge > 120 ? "warn" : "ok");
@@ -8302,6 +8330,13 @@ async function renderStatus() {
     devCard.appendChild(note);
   }
   wrap.appendChild(devCard);
+
+  // Order for navigability: the day and its health first, then the pipeline and
+  // sessions, then personal (offline), device, and finally the look setting.
+  // appendChild moves an existing child, so this just reorders what's already here.
+  for (const c of [briefingCard, contentCard, srcCard, hbCard, sysCard, offCard, devCard, lookCard]) {
+    if (c) wrap.appendChild(c);
+  }
 }
 
 /* ---------- alerts: web push + following (Phase 4) ----------

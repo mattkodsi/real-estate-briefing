@@ -2040,6 +2040,16 @@ button.heat-cell:active { outline: 1.5px solid var(--ink); }
   padding: 14px 16px;
   margin-bottom: 14px;
 }
+/* full-width labeled block (Notes and other long prose in status cards) */
+.status-block { padding: 10px 0 2px; border-top: 1px solid var(--rule); margin-top: 8px; }
+.status-block:first-child { border-top: none; margin-top: 0; }
+.status-block-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--ink-3); margin-bottom: 6px;
+}
+.status-block-body {
+  font-size: 13px; line-height: 1.5; color: var(--ink-2); white-space: pre-wrap;
+}
 /* brief highlight when deep-linked from the cookie-expiry push */
 .status-card.status-flash {
   animation: statusFlash 1.8s ease;

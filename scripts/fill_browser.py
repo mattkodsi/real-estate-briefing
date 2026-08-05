@@ -238,7 +238,7 @@ def main() -> int:
             break
     if not any_targets:
         print(f"SUMMARY: nothing to fill across {len(dates)} day(s)")
-        fill_content.record_heartbeat(dates[0], 0, 0, "")
+        fill_content.record_heartbeat(dates[0], 0, 0, "github-actions")
         return 0
 
     from playwright.sync_api import sync_playwright  # imported late: no-op runs skip it
@@ -256,7 +256,7 @@ def main() -> int:
             total_failed += x
         browser.close()
 
-    fill_content.record_heartbeat(dates[0], total_filled, total_failed, "")
+    fill_content.record_heartbeat(dates[0], total_filled, total_failed, "github-actions")
     print(f"SUMMARY: filled {total_filled}, {total_failed} still missing across {len(dates)} day(s)")
 
     # Source-health watchdog: after filling, check per-publisher coverage and
