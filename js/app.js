@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v137";
+const APP_VERSION = "v138";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -8200,7 +8200,7 @@ async function renderStatus() {
     statusRow(briefingCard, "Last compiled", day.generatedAt
       ? new Date(day.generatedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—");
     statusRow(briefingCard, "Stories", `${stories.length} (${stories.filter((s) => s.featured).length} top · ${stories.filter((s) => s.brief).length} briefs)`);
-    if (day.notes) statusBlock(briefingCard, "Notes", day.notes);
+    statusBlock(briefingCard, "Notes", day.notes || "Nothing unusual today.");
   } else {
     statusRow(briefingCard, "Date", "no briefing loaded", "warn");
   }
@@ -8282,33 +8282,28 @@ async function renderStatus() {
   let health = null;
   try { const h = await sb("app_status?id=eq.source_health&select=data"); health = h[0]?.data || null; } catch { /* offline */ }
   const probs = (health?.problems || []);
-  statusRow(sysCard, "Session monitor",
-    probs.length ? `⚠ ${probs.length} issue${probs.length === 1 ? "" : "s"}`
-      : health?.checkedAt ? `active · checked ${fmtAge(ageMin(health.checkedAt))}` : "active",
-    probs.length ? "bad" : "ok");
+  statusRow(sysCard, "Monitoring",
+    health?.checkedAt ? `checked ${fmtAge(ageMin(health.checkedAt))}` : "active", "ok");
 
   for (const site of SESSION_SITES) {
-    const label = site.label + " login";
+    // Bisnow fetches without a login, so it has no session to expire.
+    if (site.domain === "bisnow.com") {
+      statusRow(sysCard, site.label, "no login needed");
+      continue;
+    }
     const row = connMeta.find((r) => r.id === "conn_" + site.domain);
-    const at = row?.data?.savedAt;
     const needs = row?.data?.needsReconnect;
-    // neutral tone on purpose: a stored cookie is NOT proof content is fetching.
-    // Most subscriber articles ship full text without a login. Red only when the
-    // pipeline actually detected a session-gated fetch failing (needsReconnect).
-    const r = statusRow(sysCard, label,
-      needs ? "reconnect needed" : at ? `cookie saved ${fmtAge(ageMin(at))}` : "not stored",
-      needs ? "bad" : at && ageMin(at) / 1440 > 60 ? "warn" : "");
+    // the plain answer to "has the cookie expired?": Active (green) or Expired (red)
+    const r = statusRow(sysCard, site.label, needs ? "Expired" : "Active", needs ? "bad" : "ok");
     const btn = document.createElement("button");
     btn.className = "status-reconnect" + (needs ? " urgent" : "");
-    btn.textContent = "Reconnect";
+    btn.textContent = needs ? "Reconnect" : "Refresh";
     btn.addEventListener("click", () => openReconnectSheet(site));
     r.appendChild(btn);
   }
   const sNote = document.createElement("p");
   sNote.className = "status-note";
-  sNote.textContent = probs.length
-    ? "⚠ " + probs.join("; ") + ". The monitor already pushed you — reconnect above."
-    : "Auto-checked after every fill (~30 min). If a subscriber login expires you'll get a push and this turns red — you don't have to watch it. (A stored cookie isn't proof of coverage: most articles ship full text without one, and Bisnow fetches free.)";
+  sNote.textContent = "Logins are checked automatically after every fetch. If one expires it turns red here and you get a push to reconnect.";
   sysCard.appendChild(sNote);
   const rAge = ageMin(ratesAt);
   statusRow(sysCard, "Rates cache", fmtAge(rAge), rAge > 120 ? "warn" : "ok");
