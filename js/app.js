@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v138";
+const APP_VERSION = "v139";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -8282,19 +8282,19 @@ async function renderStatus() {
   let health = null;
   try { const h = await sb("app_status?id=eq.source_health&select=data"); health = h[0]?.data || null; } catch { /* offline */ }
   const probs = (health?.problems || []);
-  statusRow(sysCard, "Monitoring",
+  statusRow(sysCard, "Session monitor",
     health?.checkedAt ? `checked ${fmtAge(ageMin(health.checkedAt))}` : "active", "ok");
 
   for (const site of SESSION_SITES) {
-    // Bisnow fetches without a login, so it has no session to expire.
-    if (site.domain === "bisnow.com") {
-      statusRow(sysCard, site.label, "no login needed");
-      continue;
-    }
     const row = connMeta.find((r) => r.id === "conn_" + site.domain);
+    const at = row?.data?.savedAt;
     const needs = row?.data?.needsReconnect;
-    // the plain answer to "has the cookie expired?": Active (green) or Expired (red)
-    const r = statusRow(sysCard, site.label, needs ? "Expired" : "Active", needs ? "bad" : "ok");
+    // The app CAN'T read the cookie itself (it's in the locked vault), so it can't
+    // literally verify validity — it shows when the cookie was saved, and flips to
+    // a red "Expired" only when the monitor sees fetches from this site failing.
+    const r = statusRow(sysCard, site.label,
+      needs ? "Expired — reconnect" : at ? `saved ${fmtAge(ageMin(at))}` : "not stored",
+      needs ? "bad" : "");
     const btn = document.createElement("button");
     btn.className = "status-reconnect" + (needs ? " urgent" : "");
     btn.textContent = needs ? "Reconnect" : "Refresh";
@@ -8303,7 +8303,7 @@ async function renderStatus() {
   }
   const sNote = document.createElement("p");
   sNote.className = "status-note";
-  sNote.textContent = "Logins are checked automatically after every fetch. If one expires it turns red here and you get a push to reconnect.";
+  sNote.textContent = "The Real Deal's session is watched after every fetch — if it starts failing this turns red and you get a push to reconnect. Bisnow has a saved cookie too, though it fetches most articles without one.";
   sysCard.appendChild(sNote);
   const rAge = ageMin(ratesAt);
   statusRow(sysCard, "Rates cache", fmtAge(rAge), rAge > 120 ? "warn" : "ok");
