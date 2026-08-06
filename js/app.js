@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v141";
+const APP_VERSION = "v142";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -167,6 +167,7 @@ const state = {
   dates: [],
   weeks: [],
   currentDate: null,
+  frontDate: null,   // the day the front page shows: newest date that HAS stories
   days: new Map(),   // date -> day json
   weeksData: new Map(),
   map: null,
@@ -235,12 +236,30 @@ async function fetchIndex() {
   state.weeks = weeks.map((r) => r.week_of);
 }
 
+/* The day the front page should show: the newest date that actually HAS stories.
+   A scheduled run publishes a row for the new calendar day as soon as it runs —
+   sometimes before that day's first newsletters have arrived (an empty stories[]).
+   Rather than flip the front page to a bare "next day," we keep showing the most
+   recent day WITH content until the new day earns its first story, then roll to it.
+   Walks back from the newest row (bounded) until it finds a non-empty day. */
+async function resolveFrontDate() {
+  const ds = state.dates;
+  for (let i = ds.length - 1, seen = 0; i >= 0 && seen < 4; i--, seen++) {
+    try {
+      const d = await getDay(ds[i]);
+      if (d && (d.stories?.length || 0) > 0) return ds[i];
+    } catch { /* unreadable — try the prior day */ }
+  }
+  return ds[ds.length - 1] || null;   // nothing has content yet → newest row
+}
+
 async function init() {
   try {
     await fetchIndex();
   } catch { /* leave empty */ }
 
-  state.currentDate = state.dates[state.dates.length - 1] || null;
+  state.currentDate = await resolveFrontDate();
+  state.frontDate = state.currentDate;
 
   $("prev-day").addEventListener("click", () => stepDay(-1));
   $("next-day").addEventListener("click", () => stepDay(1));
@@ -251,7 +270,7 @@ async function init() {
   // footer). From an older day it still snaps back to today first.
   document.querySelector(".wordmark").addEventListener("click", (e) => {
     e.preventDefault();
-    const latest = state.dates[state.dates.length - 1] || null;
+    const latest = state.frontDate || state.dates[state.dates.length - 1] || null;
     const h = location.hash;
     const onBriefing = h === "" || h === "#/" || h.startsWith("#/day/");
     if (onBriefing && state.currentDate === latest) { location.hash = "/status"; return; }
@@ -972,12 +991,16 @@ async function refreshData(silent, manual) {
   try {
     await fetchIndex();
 
-    const latest = state.dates[state.dates.length - 1] || null;
-    const target = state.currentDate && state.dates.includes(state.currentDate) ? state.currentDate : latest;
+    const prevFront = state.frontDate;
+    const prevCurrent = state.currentDate;
+    // generatedAt of the day currently on screen — captured BEFORE busting caches,
+    // so we can still tell whether its content actually changed this refresh
+    const shownBefore = prevCurrent ? state.days.get(prevCurrent)?.generatedAt : null;
 
-    const before = target ? state.days.get(target)?.generatedAt : null;
-    if (target) state.days.delete(target);
-    if (latest && latest !== target) state.days.delete(latest);
+    // bust cached copies of the tail days so resolveFrontDate + the render below
+    // read fresh content (covers today, an empty just-published next day, and the
+    // day we're showing)
+    for (const d of state.dates.slice(-4)) state.days.delete(d);
     const wk = state.weeks[state.weeks.length - 1];
     if (wk) state.weeksData.delete(wk);
     state.players = null; // roster refetches next time the Players view opens
@@ -989,12 +1012,28 @@ async function refreshData(silent, manual) {
     state.metrics = null;
     state.pulse = null;   // Market Pulse re-reads the cache on next Desk/Market open
 
+    // the newest day WITH content, recomputed against fresh data
+    const newFront = await resolveFrontDate();
+    state.frontDate = newFront;
+    // Roll forward ONLY a reader sitting on the front (today) page — the moment a
+    // new day earns its first story, the front page advances to it. Someone who
+    // deliberately paged back to an older day stays put.
+    const onFront = prevCurrent == null || prevCurrent === prevFront;
+    let target = prevCurrent && state.dates.includes(prevCurrent) ? prevCurrent : newFront;
+    if (onFront) target = newFront;
+
     const fresh = target ? await getDay(target) : null;
     state.currentDate = target;
-    const changed = !!fresh && fresh.generatedAt !== before;
+    const rolledForward = target !== prevCurrent;                        // advanced to a newer day
+    const changed = rolledForward || (!!fresh && fresh.generatedAt !== shownBefore);
 
     const readerOpen = !$("reader").hidden;
-    if (changed && !readerOpen) route();
+    if (changed && !readerOpen) {
+      // if we advanced days while the hash still pins the old day, normalize it to
+      // the front so route() renders the new day (harmless on any non-day view)
+      if (rolledForward && onFront && location.hash.startsWith("#/day/")) location.hash = "/";
+      else route();
+    }
     if (changed) flashToast("Briefing updated");
     else if (manual) flashToast("Up to date");
     loadRates();
