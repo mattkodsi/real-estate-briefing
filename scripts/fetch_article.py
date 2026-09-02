@@ -58,6 +58,14 @@ JUNK_IMG = re.compile(r"placeholder|/blank[._-]|spacer|transparent\.(?:png|gif)|
 VOID = {"img", "br", "hr", "meta", "input", "source", "link", "area", "base",
         "col", "embed", "param", "track", "wbr"}
 
+# Semantic tags that page builders (Beaver Builder, Elementor, block themes)
+# misuse as LAYOUT WRAPPERS around the real article rather than as site chrome.
+# They're in DROP_SUBTREES to skip nav/headers/footers, but when one carries a
+# content-container class it's wrapping the body — dropping it would discard the
+# whole article (e.g. CommercialSearch wraps its post in <header class="fl-builder-content">).
+SOFT_DROP = {"header", "footer", "aside"}
+CONTENT_WRAP = re.compile(r"fl-builder-content|entry-content|post-content|article-content|article-body", re.I)
+
 
 class ArticleExtractor(HTMLParser):
     """Collect allowed elements inside <article> (or the whole body as fallback).
@@ -117,8 +125,10 @@ class ArticleExtractor(HTMLParser):
                 self.out.append(f'<img src="{src}" alt="{alt}">')
                 if not self.body_image:
                     self.body_image = src   # first real article image → last-resort hero
-        elif emit and (tag in DROP_SUBTREES or
-                       (self.junk_classes and JUNK.search(a.get("class", "") + " " + a.get("id", "")))):
+        elif emit and (
+                (tag in DROP_SUBTREES
+                 and not (tag in SOFT_DROP and CONTENT_WRAP.search(a.get("class", ""))))
+                or (self.junk_classes and JUNK.search(a.get("class", "") + " " + a.get("id", "")))):
             self.drop_depth = self.depth  # begin skipping this subtree
         elif emit and tag in KEEP:
             self.open_keep.append(tag)
@@ -128,8 +138,19 @@ class ArticleExtractor(HTMLParser):
             self.depth += 1
 
     def handle_startendtag(self, tag, attrs):
-        # self-closed tag (e.g. <img/>) — treat as a start of a void element
+        # A self-closed tag (<img/>, and crucially inline-SVG children like
+        # <path/>, <rect/>, <use/>) opens and closes in one token — no endtag
+        # follows. handle_starttag bumps self.depth for any non-void tag, so
+        # without correction each self-closed non-void tag leaks +1 depth. Left
+        # uncorrected, the leak inside an <svg> DROP subtree means depth never
+        # returns to drop_depth, and the parser stays stuck dropping — silently
+        # discarding the whole article body on any page with inline SVG icons.
         self.handle_starttag(tag, attrs)
+        if tag not in VOID:
+            self.depth -= 1  # reverse the phantom open; this tag is already closed
+            # if it opened a drop subtree, it has no children to skip — release it
+            if self.dropping and self.depth <= self.drop_depth:
+                self.drop_depth = None
 
     def handle_endtag(self, tag):
         if tag == "title":

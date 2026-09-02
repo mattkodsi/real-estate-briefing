@@ -79,7 +79,12 @@ def fetch_with_browser(page, url: str) -> tuple[str, str]:
 # stragglers. Older days rolled off "today" would otherwise never get another
 # real-browser attempt; this backfills any that were missed (a Cloudflare wall
 # that later clears, a wrapper the browser can now follow, a late-arriving edit).
-BACKFILL_DAYS = 4
+# Set to a week: Bisnow's a-prod.bisnow.io short-links (and other redirecting
+# wrappers) are intermittently down (observed live 502s), so a link can fail for
+# several days before it resolves. At 4 days those aged out of the retry window
+# and were never filled despite having real content; a week of retries recovers
+# the flaky-then-good ones. (Hard paywalls just fail fast on each pass.)
+BACKFILL_DAYS = 7
 
 
 def _recent_dates(today: str) -> list[str]:
