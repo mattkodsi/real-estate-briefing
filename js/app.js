@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v142";
+const APP_VERSION = "v143";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -397,10 +397,13 @@ async function init() {
       reader.style.transition = "none";
       if (rt.edge) {
         // EXIT zone (started at the left edge): only a rightward drag counts —
-        // the story slides right to reveal the briefing, fading as it commits.
+        // the story slides right to reveal the view behind it. It stays FULLY
+        // OPAQUE the whole drag: the reader's background is solid and the feed
+        // sits directly behind it, so any fade bares the feed THROUGH the article
+        // (the "double menu" ghosting). Slide only, never fade.
         const d = Math.max(0, rt.dx);
         reader.style.transform = `translateX(${d}px)`;
-        reader.style.opacity = String(Math.max(0.55, 1 - d / (window.innerWidth * 0.9)));
+        reader.style.opacity = "1";
       } else {
         // NAVIGATION zone (content): keep the single reader STATIC and fully opaque
         // while dragging — translating it here would bare the briefing behind it.
@@ -432,11 +435,13 @@ async function init() {
       reader.style.transform = ""; reader.style.opacity = "";
     } else if (axis === "close") {
       if (dy > 175) {
-        // committed: NOW it fades, entirely while sliding off — never before
-        reader.style.transition = "transform .22s ease, opacity .22s ease";
+        // committed: slide straight down off the bottom, FULLY OPAQUE — a fade
+        // would bare the feed through the reader (the same ghosting as the edge
+        // exit). The opaque panel sliding off is the whole reveal.
+        reader.style.transition = "transform .24s cubic-bezier(.33, 0, .12, 1)";
         reader.style.transform = "translateY(100%)";
-        reader.style.opacity = "0";
-        setTimeout(() => { closeReaderNav(); reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; }, 210);
+        reader.style.opacity = "1";
+        setTimeout(() => { closeReaderNav(); reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; }, 230);
       } else {
         // let go early → springs back with a little give (the curve overshoots a hair)
         reader.style.transition = "transform .34s cubic-bezier(.22,1.15,.36,1), opacity .2s ease";
@@ -5020,14 +5025,18 @@ function readerSwipeStep(delta) {
 // a left-edge swipe (or pull-down) returns to the briefing: the story slides off
 // to the RIGHT to reveal the feed underneath — the iOS "back" direction.
 function readerSwipeExit() {
+  // Slide the story OFF to the right, fully opaque, to reveal the view behind it —
+  // an iOS "back". No opacity fade: the reader's background is solid and the feed
+  // sits directly behind, so fading would show the feed straight through the
+  // article as it slides (the "double menu" ghost). Opaque slide = clean reveal.
   const reader = $("reader");
-  reader.style.transition = "transform .2s ease, opacity .2s ease";
+  reader.style.transition = "transform .24s cubic-bezier(.33, 0, .12, 1)";
   reader.style.transform = "translateX(100%)";
-  reader.style.opacity = "0";
+  reader.style.opacity = "1";
   setTimeout(() => {
     closeReaderNav();
     reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = "";
-  }, 190);
+  }, 230);
 }
 
 function renderReaderProgress() {
