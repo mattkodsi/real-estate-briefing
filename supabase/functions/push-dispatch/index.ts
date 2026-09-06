@@ -141,14 +141,8 @@ Deno.serve(async (req: Request) => {
           ({ name: row.data.name, id: m.id, title: m.title })));
       }
       for (const [profile, slugs] of watchers) {
-        for (const slug of slugs) {
-          for (const m of todayMentions.get(slug) || []) {
-            const id = `watch:${profile}:${today}:${slug}:${m.id}`;
-            await deliver([profile], {title:`${m.name} in today's briefing`,body:m.title,
-              url:`./#/story/${today}/${m.id}`,tag:id});
-            sentIds.push(id);
-          }
-        }
+        const items = slugs.flatMap(slug => (todayMentions.get(slug) || []).map(m => ({...m,slug})));
+        if(items.length) await rpc("audit_enqueue_watch", {p_profile:profile,p_day:today,p_items:items});
       }
     }
 
@@ -175,7 +169,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const delivery = await drainDeliveries(rpc, async (job: {sub: PushSubscriptionJSON;payload: Record<string,unknown>}) => {
+    const delivery = await drainDeliveries(rpc, async (job: {sub: Parameters<InstanceType<typeof webpush.ApplicationServer>["subscribe"]>[0];payload: Record<string,unknown>}) => {
       await server.subscribe(job.sub).pushTextMessage(JSON.stringify(job.payload), {});
     });
     return new Response(JSON.stringify({ ok: true, date: today, queued: sentIds, ...delivery }), { headers: HEADERS });

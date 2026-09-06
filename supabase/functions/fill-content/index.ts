@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 // fill-content: serverless STANDBY content-filler (layer 4 of the failover chain).
 //
 // A pg_cron job (fill-heartbeat-standby, every 15 min) invokes this function.

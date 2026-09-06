@@ -1,8 +1,9 @@
 // DB atomically owns one device lease at a time. A provider failure is never success.
-export async function drainDeliveries(rpc, send, limit=40) {
+/** @param {string|null} [event] */
+export async function drainDeliveries(rpc, send, limit=40, event=null) {
  const result={sent:0,failed:0,pruned:0};
  for(let i=0;i<limit;i++) {
-  const [job]=await rpc('audit_claim_push',{});if(!job)break;
+  const [job]=await rpc('audit_claim_push',event===null?{}:{p_event:event});if(!job)break;
   let outcome='sent';let error='';
   try {await send(job);} catch(e) {
    const status=e?.response?.status;

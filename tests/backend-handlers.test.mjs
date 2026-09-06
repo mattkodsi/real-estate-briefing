@@ -26,11 +26,11 @@ test('public VAPID setup never initializes missing keys',async()=>{
 });
 
 test('authorized manual push handles empty successful enqueue response',async()=>{
- const handler=await load('push-send',async(url)=>{
+ const handler=await load('push-send',async(url,init)=>{
   if(url.includes('secrets?'))return Response.json([{data:{publicJwk:{},privateJwk:{},publicKeyB64:'public'}}]);
   if(url.includes('push_subs?'))return Response.json([{profile:'owner'}]);
   if(url.includes('audit_enqueue_push'))return new Response(null,{status:204});
-  if(url.includes('audit_claim_push'))return Response.json([]);
+  if(url.includes('audit_claim_push')){assert.match(JSON.parse(init.body).p_event,/^manual:/);return Response.json([]);}
   throw new Error('unexpected request');
  },{importVapidKeys:async()=>({}),ApplicationServer:{new:async()=>({})}});
  const res=await handler(new Request('https://functions.test/',{method:'POST',headers:{'x-audit-secret':'server-secret','content-type':'application/json'},body:JSON.stringify({title:'Test'})}));

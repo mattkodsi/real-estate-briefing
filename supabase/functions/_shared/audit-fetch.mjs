@@ -1,3 +1,4 @@
+import {Buffer} from 'node:buffer';
 import {lookup} from 'node:dns/promises';
 import {isIP} from 'node:net';
 import http from 'node:http';

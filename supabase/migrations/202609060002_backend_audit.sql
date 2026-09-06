@@ -23,15 +23,91 @@ returns void language sql security definer set search_path=public,pg_temp as $$
  and not exists(select 1 from push_log where id=p_event)
  on conflict(event_id,device_id) do nothing;
 $$;
+-- Story-level reservations keep one profile/run bundle without duplicate pings for
+-- stories mentioning several watched players. Reservation and enqueue are atomic.
+create table if not exists public.audit_watch_seen (
+ profile text not null, day date not null, story_id text not null,
+ primary key(profile,day,story_id)
+);
+alter table public.audit_watch_seen enable row level security;
+revoke all on public.audit_watch_seen from public,anon,authenticated;
+create or replace function public.audit_watch_payload(p_items jsonb,p_day text,p_tag text)
+returns jsonb language sql immutable set search_path=public,pg_temp as $$
+ select jsonb_build_object('title',case when jsonb_array_length(p_items)=1 then
+ p_items->0->>'name'||' in today''s briefing' else jsonb_array_length(p_items)||' watchlist stories in today''s briefing' end,
+ 'body',(select string_agg(x->>'title',' · ') from jsonb_array_elements(p_items) x),
+ 'url',case when jsonb_array_length(p_items)=1 then './#/story/'||p_day||'/'||(p_items->0->>'id') else './' end,
+ 'tag',p_tag,'watchItems',p_items,'watchDay',p_day);
+$$;
+create or replace function public.audit_enqueue_watch(p_profile text,p_day date,p_items jsonb)
+returns void language plpgsql security definer set search_path=public,pg_temp as $$
+declare items jsonb; event_key text;
+begin
+ -- Serialize concurrent runs for this profile before deciding the unseen bundle.
+ perform pg_advisory_xact_lock(hashtext('watch:'||p_profile));
+ with grouped as (
+ select x->>'id' id,min(x->>'title') title,min(x->>'name') name,jsonb_agg(distinct x->>'slug') slugs
+ from jsonb_array_elements(p_items) x where x->>'id' is not null group by x->>'id'
+ ), fresh as (
+ insert into audit_watch_seen(profile,day,story_id)
+ select p_profile,p_day,g.id from grouped g
+ where not exists(select 1 from push_log l, jsonb_array_elements_text(g.slugs) slug
+ where l.id='watch:'||p_profile||':'||p_day||':'||slug||':'||g.id)
+ on conflict do nothing returning story_id
+ ) select jsonb_agg(jsonb_build_object('id',g.id,'title',g.title,'name',g.name,'slugs',g.slugs) order by g.id)
+ into items from grouped g join fresh f on f.story_id=g.id;
+ if items is null then return; end if;
+ event_key:='watch:'||p_profile||':'||p_day||':bundle:'||md5(items::text);
+ perform audit_enqueue_push(event_key,array[p_profile],audit_watch_payload(items,p_day::text,event_key));
+end $$;
+create or replace function public.audit_push_eligible(p_profile text,p_event text,p_payload jsonb)
+returns boolean language sql stable security definer set search_path=public,pg_temp as $$
+ select case split_part(p_event,':',1)
+ when 'spec' then coalesce(p.data->'notifications'->>'breaking','true')<>'false'
+ when 'ready' then coalesce(p.data->'notifications'->>'ready','false')='true'
+ when 'event' then coalesce(p.data->'starEvents','[]'::jsonb) ? substring(p_event from length('event:'||p_profile||':')+1)
+ when 'watch' then coalesce(p.data->'notifications'->>'watch','true')<>'false' and
+ (case when p_payload ? 'watchItems' then exists(
+ select 1 from jsonb_array_elements(p_payload->'watchItems') item,
+ jsonb_array_elements_text(item->'slugs') slug
+ where coalesce(p.data->'watchPlayers','[]'::jsonb) ? slug)
+ else coalesce(p.data->'watchPlayers','[]'::jsonb) ? split_part(p_event,':',4) end)
+ else true end
+ from (select (select data from prefs where profile=p_profile) data) p;
+$$;
+create or replace function public.audit_claim_push(p_event text)
+returns setof public.audit_push_jobs language plpgsql security definer set search_path=public,pg_temp as $$
+declare job audit_push_jobs; current_sub jsonb; items jsonb;
+begin
+ loop
+ select q.* into job from audit_push_jobs q where
+ (p_event is null or q.event_id=p_event) and
+ ((q.state in ('pending','retry') and q.next_attempt_at<=now()) or
+ (q.state='sending' and q.lease_until<now()))
+ order by q.next_attempt_at,q.id for update skip locked limit 1;
+ if not found then return; end if;
+ select s.sub into current_sub from push_subs s where s.profile=job.profile
+ and md5(s.sub->>'endpoint')=job.device_id and coalesce(s.sub->>'disabled','false')<>'true' limit 1;
+ if current_sub is null or not audit_push_eligible(job.profile,job.event_id,job.payload) then
+ update audit_push_jobs set state='gone',last_error='No longer eligible',claim_token=null,lease_until=null where id=job.id;
+ continue;
+ end if;
+ if job.payload ? 'watchItems' then
+ select jsonb_agg(item) into items from jsonb_array_elements(job.payload->'watchItems') item
+ where exists(select 1 from jsonb_array_elements_text(item->'slugs') slug, prefs p
+ where p.profile=job.profile and coalesce(p.data->'watchPlayers','[]'::jsonb) ? slug);
+ job.payload:=audit_watch_payload(items,job.payload->>'watchDay',job.event_id);
+ end if;
+ return query update audit_push_jobs j set state='sending',attempts=j.attempts+1,
+ sub=current_sub,payload=job.payload,claim_token=gen_random_uuid(),lease_until=now()+interval '5 minutes'
+ where j.id=job.id returning j.*;
+ return;
+ end loop;
+end $$;
+-- The dispatcher drains scheduled retries; manual callers claim their event only.
 create or replace function public.audit_claim_push()
 returns setof public.audit_push_jobs language sql security definer set search_path=public,pg_temp as $$
- update audit_push_jobs j set state='sending', attempts=attempts+1,
- claim_token=gen_random_uuid(),lease_until=now()+interval '5 minutes'
- where j.id=(select q.id from audit_push_jobs q where
- (q.state in ('pending','retry') and q.next_attempt_at<=now()) or
- (q.state='sending' and q.lease_until<now())
- order by q.next_attempt_at,q.id for update skip locked limit 1)
- returning j.*;
+ select * from audit_claim_push(null::text);
 $$;
 create or replace function public.audit_finish_push(p_id bigint,p_token uuid,p_outcome text,p_error text)
 returns void language plpgsql security definer set search_path=public,pg_temp as $$
@@ -78,3 +154,6 @@ begin
 end $$;
 revoke all on function public.audit_enqueue_push(text,text[],jsonb),public.audit_claim_push(),public.audit_finish_push(bigint,uuid,text,text),public.audit_claim_fill(date,jsonb,integer),public.audit_publish_fill(date,jsonb,jsonb) from public,anon,authenticated;
 grant execute on function public.audit_enqueue_push(text,text[],jsonb),public.audit_claim_push(),public.audit_finish_push(bigint,uuid,text,text),public.audit_claim_fill(date,jsonb,integer),public.audit_publish_fill(date,jsonb,jsonb) to service_role;
+
+revoke all on function public.audit_enqueue_watch(text,date,jsonb),public.audit_watch_payload(jsonb,text,text),public.audit_push_eligible(text,text,jsonb),public.audit_claim_push(text) from public,anon,authenticated;
+grant execute on function public.audit_enqueue_watch(text,date,jsonb),public.audit_claim_push(text) to service_role;

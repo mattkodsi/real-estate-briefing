@@ -93,9 +93,9 @@ export async function deliver(
   const { keys } = await loadVapid();
   const server = await webpush.ApplicationServer.new({contactInformation:CONTACT,vapidKeys:keys});
   await rpc("audit_enqueue_push", {p_event:payload.tag,p_profiles:recipients,p_payload:payload});
-  const result = await drainDeliveries(rpc, async (job: {sub: PushSubscriptionJSON;payload: Record<string,unknown>}) => {
+  const result = await drainDeliveries(rpc, async (job: {sub: Parameters<InstanceType<typeof webpush.ApplicationServer>["subscribe"]>[0];payload: Record<string,unknown>}) => {
     await server.subscribe(job.sub).pushTextMessage(JSON.stringify(job.payload), {});
-  });
+  }, 40, String(payload.tag));
   return {...result,devices:rows.length};
 }
 
