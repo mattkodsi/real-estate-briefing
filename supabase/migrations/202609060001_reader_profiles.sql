@@ -30,7 +30,7 @@ returns jsonb language plpgsql security definer set search_path=pg_catalog,exten
 declare
  a text := payload->>'action'; p text := payload->>'profile';
  d jsonb; c reader_private.credentials%rowtype;
- t text; th text; k text; n integer; row_count integer;
+ t text; th text; k text; v jsonb; n integer; row_count integer;
 begin
  if a='list' then
   return jsonb_build_object('profiles',coalesce((select jsonb_agg(jsonb_build_object('slug',f.profile,'name',f.data->>'name','color',f.data->>'color','hasPin',cred.pin_hash is not null or cred.legacy_hash is not null) order by f.profile) from public.prefs f join reader_private.credentials cred on cred.profile=f.profile),'[]'::jsonb));
@@ -77,6 +77,22 @@ begin
  elsif a='patch' then
   if jsonb_typeof(payload->'changes') is distinct from 'object' then return '{"error":"invalid_changes","status":400}'; end if;
   if exists(select 1 from jsonb_object_keys(payload->'changes') as keys(key) where key not in ('saved','read','seen','learnedTerms','starEvents','theme','look','textScale','watchPlayers','notifications')) then return '{"error":"invalid_changes","status":400}'; end if;
+  for k,v in select key,value from jsonb_each(payload->'changes') loop
+   if k in ('saved','read','learnedTerms','starEvents','watchPlayers') then
+    if jsonb_typeof(v) is distinct from 'array' then return '{"error":"invalid_changes","status":400}'; end if;
+    if k='saved' then
+     if exists(select 1 from jsonb_array_elements(v) e where jsonb_typeof(e) is distinct from 'object' or jsonb_typeof(e->'key') is distinct from 'string' or jsonb_typeof(e->'date') is distinct from 'string' or jsonb_typeof(e->'id') is distinct from 'string' or jsonb_typeof(e->'title') is distinct from 'string') then return '{"error":"invalid_changes","status":400}'; end if;
+    elsif exists(select 1 from jsonb_array_elements(v) e where jsonb_typeof(e) is distinct from 'string') then return '{"error":"invalid_changes","status":400}'; end if;
+   elsif k='notifications' then
+    if jsonb_typeof(v) is distinct from 'object' then return '{"error":"invalid_changes","status":400}'; end if;
+    if exists(select 1 from jsonb_each(v) e where e.key not in ('breaking','watch','ready') or jsonb_typeof(e.value) is distinct from 'boolean') then return '{"error":"invalid_changes","status":400}'; end if;
+   elsif k='seen' then
+    if v<>'null'::jsonb then
+     if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'date') is distinct from 'string' or jsonb_typeof(v->'sig') is distinct from 'object' then return '{"error":"invalid_changes","status":400}'; end if;
+     if exists(select 1 from jsonb_each(v->'sig') e where jsonb_typeof(e.value) is distinct from 'string') then return '{"error":"invalid_changes","status":400}'; end if;
+    end if;
+   elsif (k='theme' and v not in ('"system"','"light"','"dark"')) or (k='look' and v not in ('"legacy"','"updated"')) or (k='textScale' and v not in ('"s"','"m"','"l"')) then return '{"error":"invalid_changes","status":400}'; end if;
+  end loop;
   update public.prefs set data=data||(payload->'changes'),updated_at=now() where profile=p;
  elsif a='meta' then
   update public.prefs set data=data||jsonb_build_object('name',trim(payload->>'name'),'color',payload->>'color'),updated_at=now() where profile=p;
