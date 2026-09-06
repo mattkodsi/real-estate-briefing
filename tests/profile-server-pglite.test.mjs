@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {PGlite} from '../../backend-test-runtime/node_modules/@electric-sql/pglite/dist/index.js';
-import {pgcrypto} from '../../backend-test-runtime/node_modules/@electric-sql/pglite/dist/contrib/pgcrypto.js';
+import {PGlite} from '@electric-sql/pglite';
+import {pgcrypto} from '@electric-sql/pglite/contrib/pgcrypto';
 test('real PostgreSQL migration and authorization regression suite',async()=>{
  const db=new PGlite({extensions:{pgcrypto}});
  try {

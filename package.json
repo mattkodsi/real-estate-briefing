@@ -1,0 +1,13 @@
+{
+  "devDependencies": {
+    "@electric-sql/pglite": "0.4.6",
+    "jsdom": "^26.1.0"
+  },
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
