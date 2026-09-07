@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v143";
+const APP_VERSION = "v145";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -102,12 +102,35 @@ function decodeEntities(s) {
 /* Sanitize stored article HTML at render time: drop any <script>, and strip
    blank/placeholder <img>s so a bad hero or watermark tile never shows. */
 function sanitizeArticleHtml(html) {
-  return (html || "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<img\b[^>]*>/gi, (tag) => {
-      const m = tag.match(/src\s*=\s*["']([^"']+)["']/i);
-      return m && isJunkImageUrl(m[1]) ? "" : tag;
-    });
+  // Parse inertly, then rebuild an allowlisted tree. Never copy arbitrary attributes.
+  const source = document.createElement("template");
+  source.innerHTML = String(html || "");
+  const out = document.createElement("div");
+  const allowed = new Set(["P", "H2", "H3", "H4", "BLOCKQUOTE", "UL", "OL", "LI", "IMG", "FIGURE", "FIGCAPTION", "A", "STRONG", "B", "EM", "I", "BR", "HR", "SPAN", "DIV", "TABLE", "THEAD", "TBODY", "TR", "TD", "TH", "SUP", "SUB"]);
+  const drop = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "FORM", "INPUT", "BUTTON", "TEXTAREA", "SELECT", "TEMPLATE", "LINK", "META", "BASE"]);
+  const safeUrl = value => {
+    try { const u = new URL(value, document.baseURI); return ["https:", "http:"].includes(u.protocol) ? u.href : null; }
+    catch { return null; }
+  };
+  function copy(node, parent) {
+    if (node.nodeType === 3) { parent.appendChild(document.createTextNode(node.textContent)); return; }
+    if (node.nodeType !== 1 || node.namespaceURI !== "http://www.w3.org/1999/xhtml" || drop.has(node.tagName)) return;
+    if (!allowed.has(node.tagName)) { for (const child of node.childNodes) copy(child, parent); return; }
+    const el = document.createElement(node.tagName.toLowerCase());
+    if (node.tagName === "IMG") {
+      const src = safeUrl(node.getAttribute("src") || "");
+      if (!src || !node.getAttribute("src") || isJunkImageUrl(src)) return;
+      el.src = src; el.alt = node.getAttribute("alt") || ""; el.loading = "lazy";
+    }
+    if (node.tagName === "A") {
+      const href = node.getAttribute("href"); const safe = href && safeUrl(href);
+      if (safe) { el.href = safe; el.rel = "noopener noreferrer"; }
+    }
+    for (const child of node.childNodes) copy(child, el);
+    parent.appendChild(el);
+  }
+  for (const node of source.content.childNodes) copy(node, out);
+  return out.innerHTML;
 }
 
 /* Identify the same underlying photo across different CDN/proxy transforms.
@@ -285,10 +308,18 @@ async function init() {
   try { navigator.clearAppBadge?.(); } catch { /* unsupported */ }
   // the monogram locks the app back to the picker; re-entering any
   // passcoded profile (including your own) asks for its code
-  $("profile-btn").addEventListener("click", () => {
+  $("profile-btn").addEventListener("click", async () => {
     setLocked();
+    const slug = profile.slug;
+    const oldToken = readerToken(slug);
+    const picker = showProfilePicker(false);
+    await flushPrefs().catch(() => {});
+    if (slug && slug !== "guest") {
+      await readerApi("logout", slug, { token: oldToken }).catch(() => {});
+      if (readerToken(slug) === oldToken) localStorage.removeItem("briefing_session_" + slug);
+    }
     try { sessionStorage.removeItem(GUEST_KEY); } catch { /* ignore */ }
-    showProfilePicker(false);
+    await picker;
   });
 
   // remember what's already saved for offline (survives reloads) + wire the
@@ -301,6 +332,7 @@ async function init() {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       refreshData(true);
+      schedulePrefsFlush(true);
       preloadForOffline(false); // keep the offline cache fresh each time the app is reopened
       paintBellDot();
       try { navigator.clearAppBadge?.(); } catch { /* unsupported */ }
@@ -847,24 +879,25 @@ async function preloadForOffline(manual) {
   preloading = true;
   lastPreload = now;
   const dates = state.dates.slice(-OFFLINE_DAYS).reverse(); // newest first — today matters most
-  let ok = 0;
+  const savedDates = [];
   try {
     for (const [i, date] of dates.entries()) {
       // Bandwidth: a background pass only refreshes what's likely to have changed —
       // today (i===0, still filling) plus any day not cached yet. A manual "Save
       // now" always re-pulls all six. Already-cached past days still count as ready.
-      if (!manual && i > 0 && state.days.has(date)) { ok++; continue; }
+      if (!manual && i > 0 && state.days.has(date)) { savedDates.push(date); continue; }
       try {
         // force a fresh network read so the SW re-caches the LATEST filled content
         // (state.days may hold an older copy from before the fill loop caught up)
         const rows = await sb(`days?date=eq.${date}&select=data`);
         const day = rows[0]?.data;
-        if (day) { state.days.set(date, day); ok++; }
+        if (day) { state.days.set(date, sanitizeDayUrls(day)); savedDates.push(date); }
       } catch { /* transient / went offline mid-run — next focus retries */ }
     }
   } finally { preloading = false; }
+  const ok = savedDates.length;
   if (ok) {
-    state.offlineReady = { at: new Date().toISOString(), dates: dates.slice(0, ok) };
+    state.offlineReady = { at: new Date().toISOString(), dates: savedDates };
     try { localStorage.setItem(OFFLINE_KEY, JSON.stringify(state.offlineReady)); } catch { /* private mode */ }
     if (manual) flashToast(`Saved ${ok} day${ok === 1 ? "" : "s"} for offline`);
     if (location.hash.startsWith("#/status")) route();
@@ -886,7 +919,7 @@ function setOnlineState(on) {
   // main for both. 0 when online, so nothing shifts.
   const h = (!on && b) ? b.offsetHeight : 0;
   document.documentElement.style.setProperty("--offline-h", h + "px");
-  if (on) preloadForOffline(false);
+  if (on) { preloadForOffline(false); schedulePrefsFlush(true); }
 }
 
 /* The three deep-data registries the pipeline maintains (steps 10b–10d). Each is
@@ -2602,7 +2635,11 @@ function marketBackdropLink(market) {
   const a = document.createElement("a");
   a.className = "cm-market-link";
   a.href = `#/market/${encodeURIComponent(market)}`;
-  a.innerHTML = `<span>${market} market — rents, values &amp; the backdrop</span><span class="cm-ml-arrow">↗</span>`;
+  const label = document.createElement("span");
+  label.textContent = `${market} market — rents, values & the backdrop`;
+  const arrow = document.createElement("span");
+  arrow.className = "cm-ml-arrow"; arrow.textContent = "↗";
+  a.append(label, arrow);
   return a;
 }
 
@@ -5193,7 +5230,9 @@ function toggleTTS() {
 }
 
 async function openReaderRoute(date, id) {
+  const expectedHash = `#/story/${date}/${id}`;
   const day = await getDay(date);
+  if (location.hash !== expectedHash) return;
   const story = (day?.stories || []).find((s) => s.id === id);
   if (!story) { location.hash = "/"; return; }
 
@@ -6020,87 +6059,72 @@ function rememberedProfile() {
   try { return localStorage.getItem(PROFILE_KEY); } catch { return null; }
 }
 
+function readerToken(slug) { try { return localStorage.getItem("briefing_session_" + slug) || ""; } catch { return ""; } }
+async function readerApi(action, slug, payload = {}) {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/reader-profile`, {
+    method: "POST", headers: { "Content-Type": "application/json", apikey: SUPABASE_KEY },
+    body: JSON.stringify({ action, profile: slug, token: readerToken(slug), ...payload }),
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) { const err = new Error(data.error || `Reader service ${res.status}`); err.status = res.status; throw err; }
+  if (data.token) localStorage.setItem("briefing_session_" + slug, data.token);
+  return data;
+}
+const prefStore = createProfileStore(localStorage,
+  async (slug, changes) => (await readerApi("patch", slug, { changes })).data,
+  (slug, data) => {
+    try { localStorage.setItem(profileCacheKey(slug), JSON.stringify(data)); } catch { /* storage unavailable */ }
+    if (profile.slug === slug && !profile.guest) profile.data = data;
+  });
 async function fetchProfileRows() {
-  try { return await sb("prefs?select=profile,data"); } catch { return []; }
-}
-
-/* The picker's roster: named rows from Supabase layered over the founding four. */
-function profileRoster(rows) {
-  const bySlug = new Map(FOUNDERS.map((f) => [f.slug, { ...f, pinHash: null }]));
-  for (const r of rows) {
-    const meta = r.data || {};
-    bySlug.set(r.profile, {
-      slug: r.profile,
-      name: meta.name || r.profile,
-      color: meta.color || PROFILE_COLORS[bySlug.size % PROFILE_COLORS.length],
-      pinHash: meta.pinHash || null,
-    });
+  try {
+    const rows = (await readerApi("list", null)).profiles;
+    localStorage.setItem("briefing_roster_v2", JSON.stringify(rows));
+    return rows;
+  } catch {
+    try { return JSON.parse(localStorage.getItem("briefing_roster_v2") || "[]"); } catch { return []; }
   }
-  return [...bySlug.values()];
 }
-
+function profileRoster(rows) { return rows.map(p => ({ ...p, color: p.color || PROFILE_COLORS[0] })); }
 async function activateProfile(slug, meta) {
+  if (profile.slug && !profile.guest && profile.slug !== slug) await flushPrefs().catch(() => {});
   if (slug === "guest") {
     Object.assign(profile, { slug: "guest", name: "Guest", color: null, guest: true, data: {}, dirty: new Set() });
     try { sessionStorage.setItem(GUEST_KEY, "1"); } catch { /* ignore */ }
-    paintAvatar();
-    applyLook();
-    applyTheme();
-    return;
+    paintAvatar(); applyLook(); applyTheme(); return;
   }
-  meta = meta || FOUNDERS.find((f) => f.slug === slug) || null;
-  let data = null;
-  try {
-    const rows = await sb(`prefs?profile=eq.${encodeURIComponent(slug)}&select=data`);
-    data = rows[0]?.data ?? null;
-  } catch { /* offline — fall back to this device's cached copy */ }
-  if (data === null) {
-    try { data = JSON.parse(localStorage.getItem(profileCacheKey(slug)) || "null"); } catch { data = null; }
+  let data;
+  try { data = (await readerApi("load", slug)).data; }
+  catch (err) {
+    if (err.status === 401 || err.status === 403 || !readerToken(slug)) throw err;
+    try { data = JSON.parse(localStorage.getItem(profileCacheKey(slug)) || "null"); } catch { /* unavailable */ }
+    if (!data) throw err;
   }
-  data = data || { name: meta?.name || slug, color: meta?.color, createdAt: new Date().toISOString().slice(0, 10) };
-  if (!data.name) data.name = meta?.name || slug;
-  if (!data.color) data.color = meta?.color || PROFILE_COLORS[0];
-
-  Object.assign(profile, { slug, name: data.name, color: data.color, guest: false, data, dirty: new Set() });
-
-  // a passcode chosen at create time rides in on meta and syncs with the row
-  if (meta?.pinHash && !data.pinHash) {
-    data.pinHash = meta.pinHash;
-    profile.dirty.add("pinHash");
-  }
-
-  // one-time migration: bookmarks saved before profiles existed join this reader
+  delete data.pinHash; // remove any obsolete local verifier left by the old app
+  data = prefStore.overlay(slug, data);
+  Object.assign(profile, { slug, name: data.name || meta?.name || slug, color: data.color || PROFILE_COLORS[0], guest: false, data, dirty: new Set() });
   try {
     const legacy = JSON.parse(localStorage.getItem(LEGACY_SAVED_KEY) || "[]");
     if (legacy.length) {
-      const have = new Set((data.saved || []).map((s) => s.key));
-      data.saved = [...(data.saved || []), ...legacy.filter((s) => !have.has(s.key))];
-      profile.dirty.add("saved");
+      const have = new Set((data.saved || []).map(s => s.key));
+      setPref("saved", [...(data.saved || []), ...legacy.filter(s => !have.has(s.key))]);
     }
     localStorage.removeItem(LEGACY_SAVED_KEY);
-  } catch { /* ignore */ }
-
-  try {
     localStorage.setItem(PROFILE_KEY, slug);
     localStorage.setItem(profileCacheKey(slug), JSON.stringify(data));
     sessionStorage.removeItem(GUEST_KEY);
-  } catch { /* ignore */ }
-  schedulePrefsFlush(true); // ensure the row exists (and carries any migration)
-  paintAvatar();
-  applyLook();
-  applyTheme();
+  } catch { /* local persistence unavailable */ }
+  schedulePrefsFlush(true);
+  paintAvatar(); applyLook(); applyTheme();
 }
-
-function pref(key, fallback) {
-  const v = profile.data?.[key];
-  return v === undefined ? fallback : v;
-}
-
+function pref(key, fallback) { const v = profile.data?.[key]; return v === undefined ? fallback : v; }
 function setPref(key, value) {
   profile.data[key] = value;
-  if (profile.guest) return; // guest: session memory only, nothing persists
-  profile.dirty.add(key);
-  try { localStorage.setItem(profileCacheKey(profile.slug), JSON.stringify(profile.data)); } catch { /* ignore */ }
+  if (profile.guest) return;
+  try {
+    prefStore.enqueue(profile.slug, key, value);
+    localStorage.setItem(profileCacheKey(profile.slug), JSON.stringify(profile.data));
+  } catch { flashToast("Device storage is full — keep the app open until saved"); }
   schedulePrefsFlush();
 }
 
@@ -6365,40 +6389,13 @@ let prefsFlushTimer = null;
 function schedulePrefsFlush(soon) {
   if (profile.guest) return;
   clearTimeout(prefsFlushTimer);
-  prefsFlushTimer = setTimeout(flushPrefs, soon ? 50 : 800);
+  prefsFlushTimer = setTimeout(() => flushPrefs().catch(() => { /* durable queue retries on focus/reconnect */ }), soon ? 50 : 800);
 }
 
 async function flushPrefs() {
   if (profile.guest || !profile.slug) return;
   const slug = profile.slug;
-  const changed = [...profile.dirty];
-  profile.dirty = new Set();
-  try {
-    let remote = {};
-    try {
-      const rows = await sb(`prefs?profile=eq.${encodeURIComponent(slug)}&select=data`);
-      remote = rows[0]?.data || {};
-    } catch { /* first write or offline — send what we have */ }
-    const merged = { ...remote };
-    for (const k of changed) merged[k] = profile.data[k];
-    merged.name = profile.name;
-    merged.color = profile.color;
-    if (!merged.createdAt) merged.createdAt = profile.data.createdAt || new Date().toISOString().slice(0, 10);
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/prefs`, {
-      method: "POST",
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
-                 "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
-      body: JSON.stringify({ profile: slug, data: merged, updated_at: new Date().toISOString() }),
-    });
-    if (!res.ok) throw new Error(`prefs ${res.status}`);
-    // adopt remote keys we didn't have, but keep anything edited mid-flight
-    const result = { ...merged };
-    for (const k of profile.dirty) result[k] = profile.data[k];
-    profile.data = result;
-    try { localStorage.setItem(profileCacheKey(slug), JSON.stringify(profile.data)); } catch { /* ignore */ }
-  } catch {
-    for (const k of changed) profile.dirty.add(k); // retry on the next write
-  }
+  return prefStore.flush(slug);
 }
 
 function paintAvatar() {
@@ -6432,29 +6429,11 @@ function clearLocked() { try { localStorage.removeItem(LOCKED_KEY); } catch { /*
 /* Upsert a profile's identity (name / color / passcode) without touching its
    other keys. Used by the picker's Edit flow. */
 async function saveProfileMeta(slug, meta) {
-  let remote = {};
-  try {
-    const rows = await sb(`prefs?profile=eq.${encodeURIComponent(slug)}&select=data`);
-    remote = rows[0]?.data || {};
-  } catch { /* offline: push what we know */ }
-  const merged = { ...remote, name: meta.name, color: meta.color };
-  if (meta.pinHash) merged.pinHash = meta.pinHash;
-  else delete merged.pinHash;
-  if (!merged.createdAt) merged.createdAt = new Date().toISOString().slice(0, 10);
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/prefs`, {
-    method: "POST",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
-               "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify({ profile: slug, data: merged, updated_at: new Date().toISOString() }),
-  });
-  if (!res.ok) throw new Error(`prefs ${res.status}`);
-  try { localStorage.setItem(profileCacheKey(slug), JSON.stringify(merged)); } catch { /* ignore */ }
+  const merged = (await readerApi("meta", slug, meta)).data;
+  const data = prefStore.overlay(slug, merged);
+  localStorage.setItem(profileCacheKey(slug), JSON.stringify(data));
   if (profile.slug === slug && !profile.guest) {
-    profile.name = merged.name;
-    profile.color = merged.color;
-    Object.assign(profile.data, { name: merged.name, color: merged.color });
-    if (merged.pinHash) profile.data.pinHash = merged.pinHash;
-    else delete profile.data.pinHash;
+    profile.name = data.name; profile.color = data.color; profile.data = data;
     paintAvatar();
   }
 }
@@ -6529,7 +6508,7 @@ function setPinFlow(host, slug, onSet, onCancel) {
           setTimeout(run, 700);
           return;
         }
-        onSet(await pinHashOf(slug, second), second);
+        onSet(second, second);
       });
       cancelLink();
     });
@@ -6594,7 +6573,7 @@ async function showProfilePicker(coldBoot) {
       closePicker(); // same reader resuming: keep the live app as-is
     } else {
       await activateProfile(p.slug, p);
-      await flushPrefs();
+      await flushPrefs().catch(() => { /* pending changes remain durable across reload */ });
       location.reload();
     }
   };
@@ -6612,8 +6591,8 @@ async function showProfilePicker(coldBoot) {
     title.textContent = p.name;
     stage.innerHTML = "";
     pinPad(stage, subtitle, async (pin, pad) => {
-      if ((await pinHashOf(p.slug, pin)) === p.pinHash) onOk();
-      else pad.fail("Wrong passcode");
+      try { await readerApi("login", p.slug, { pin }); await onOk(); }
+      catch (err) { pad.fail(err.status === 401 ? "Wrong passcode" : "Could not sign in — try again"); }
     });
     backLink("‹ All readers", () => renderGrid(backMode));
   };
@@ -6647,17 +6626,17 @@ async function showProfilePicker(coldBoot) {
     }
     el.addEventListener("click", () => {
       if (mode === "edit") {
-        if (p.pinHash) showPinFor(p, "Enter current passcode", () => renderEditForm(p, null), "edit");
-        else renderEditForm(p, null);
+        if (p.hasPin) showPinFor(p, "Enter current passcode", () => renderEditForm(p, null), "edit");
+        else readerApi("login", p.slug).then(() => renderEditForm(p, null)).catch(() => flashToast("Could not sign in — try again"));
         return;
       }
-      if (p.pinHash) {
+      if (p.hasPin) {
         showPinFor(p, "Enter passcode", () => proceed(p), "pick");
       } else {
         const grid = el.closest(".profiles-grid");
         grid.classList.add("chosen");
         el.classList.add("picked");
-        setTimeout(() => proceed(p), 420);
+        setTimeout(() => readerApi("login", p.slug).then(() => proceed(p)).catch(() => { grid.classList.remove("chosen"); el.classList.remove("picked"); flashToast("Could not sign in — try again"); }), 420);
       }
     });
     return el;
@@ -6704,7 +6683,8 @@ async function showProfilePicker(coldBoot) {
     stage.appendChild(form);
 
     let color = preserved ? preserved.color : p.color;
-    let pendingPin = preserved ? preserved.pinHash : (p.pinHash || null);
+    let pendingPin = preserved ? preserved.pin : undefined;
+    const hasPin = () => pendingPin === undefined ? p.hasPin : !!pendingPin;
 
     const preview = document.createElement("span");
     preview.className = "profile-disc preview";
@@ -6753,15 +6733,15 @@ async function showProfilePicker(coldBoot) {
     offBtn.className = "profile-chipbtn";
     offBtn.textContent = "Remove";
     const paintPin = () => {
-      status.textContent = pendingPin ? "Passcode on" : "No passcode";
-      setBtn.textContent = pendingPin ? "Change" : "Set passcode";
-      offBtn.hidden = !pendingPin;
+      status.textContent = hasPin() ? "Passcode on" : "No passcode";
+      setBtn.textContent = hasPin() ? "Change" : "Set passcode";
+      offBtn.hidden = !hasPin();
     };
     paintPin();
     const toPinFlow = () => {
-      const keep = { name: input.value, color, pinHash: pendingPin };
+      const keep = { name: input.value, color, pin: pendingPin };
       setPinFlow(stage, p.slug,
-        (hash) => { keep.pinHash = hash; renderEditForm(p, keep); },
+        (pin) => { keep.pin = pin; renderEditForm(p, keep); },
         () => renderEditForm(p, keep));
       title.textContent = p.name;
     };
@@ -6778,7 +6758,7 @@ async function showProfilePicker(coldBoot) {
       const name = input.value.trim() || p.name;
       go.textContent = "Saving…";
       try {
-        await saveProfileMeta(p.slug, { name, color, pinHash: pendingPin });
+        await saveProfileMeta(p.slug, { name, color, ...(pendingPin !== undefined ? { pin: pendingPin } : {}) });
         roster = profileRoster(await fetchProfileRows());
         renderGrid("edit");
       } catch {
@@ -6877,8 +6857,10 @@ async function showProfilePicker(coldBoot) {
       const taken = new Set(roster.map((r) => r.slug));
       let n = 2;
       while (taken.has(slug)) slug = `${slugifyName(name)}-${n++}`;
-      const pinHash = pendingRaw ? await pinHashOf(slug, pendingRaw) : null;
-      proceed({ slug, name, color, pinHash });
+      go.disabled = true;
+      try { await readerApi("create", slug, { name, color, pin: pendingRaw || null }); await proceed({ slug, name, color, hasPin: !!pendingRaw }); }
+      catch (err) { flashToast(err.message || "Could not create reader"); }
+      finally { go.disabled = false; }
     };
     go.addEventListener("click", submit);
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
@@ -8470,13 +8452,13 @@ async function currentPushSub() {
 // sub's key ≠ the current server key) and transparently re-subscribe with the new
 // key, so alerts self-heal without the user re-enabling anything. Best-effort.
 async function reconcilePushSub() {
-  if (!pushSupported()) return;
+  if (!pushSupported() || profile.guest || !profile.slug) return;
   try {
     const sub = await currentPushSub();
     if (!sub) return;  // nothing subscribed on this device — nothing to reconcile
     const key = await vapidPublicKey();
     if (!key) return;
-    if (subServerKeyB64(sub) === key) return;  // already on the current key
+    if (subServerKeyB64(sub) === key) { await savePushSub(sub.toJSON(), false); return; }
     try { await sub.unsubscribe(); } catch { /* ignore */ }
     const reg = await navigator.serviceWorker.ready;
     const fresh = await reg.pushManager.subscribe({
@@ -8488,16 +8470,22 @@ async function reconcilePushSub() {
 }
 
 async function savePushSub(subJson, disabled) {
-  await fetch(`${SUPABASE_URL}/rest/v1/push_subs`, {
-    method: "POST",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`,
-               "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" },
-    body: JSON.stringify({
-      id: subJson.endpoint,
-      profile: profile.slug,
-      sub: disabled ? { ...subJson, disabled: true } : subJson,
-    }),
-  });
+  const slug = profile.slug;
+  try { await readerApi("subscription", slug, { sub: subJson, disabled: !!disabled }); }
+  catch (err) {
+    if (err.status !== 409 || err.message !== "endpoint_owned" || disabled) throw err;
+    // A device changed readers. Retire its old subscription rather than allowing
+    // anyone with an endpoint URL to take ownership of another reader's device.
+    if (profile.slug !== slug) throw err;
+    const old = await currentPushSub();
+    if (old && !(await old.unsubscribe())) throw new Error("Could not replace this device's subscription");
+    const key = await vapidPublicKey();
+    if (!key || profile.slug !== slug) throw err;
+    const reg = await navigator.serviceWorker.ready;
+    const fresh = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(key) });
+    if (profile.slug !== slug) { await fresh.unsubscribe(); throw err; }
+    await readerApi("subscription", slug, { sub: fresh.toJSON(), disabled: false });
+  }
 }
 
 async function enableAlerts() {
@@ -8750,8 +8738,21 @@ async function sha256Hex(s) {
    (first visit, or a lock via the masthead monogram) goes through the picker,
    where each profile's own passcode gates entry. */
 function bootApp() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith("briefing_prefs_")) continue;
+      try {
+        const cached = JSON.parse(localStorage.getItem(key));
+        if (cached && typeof cached === "object") {
+          delete cached.pinHash; delete cached.pin; delete cached.token;
+          localStorage.setItem(key, JSON.stringify(cached));
+        }
+      } catch { /* leave unrelated/corrupt cache untouched */ }
+    }
+  } catch { /* storage unavailable */ }
   const slug = rememberedProfile();
-  if (slug && !isLocked()) activateProfile(slug).catch(() => {}).then(init);
+  if (slug && !isLocked()) activateProfile(slug).then(init).catch(() => showProfilePicker(true));
   else showProfilePicker(true);
 }
 
