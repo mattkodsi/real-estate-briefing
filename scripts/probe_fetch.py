@@ -16,7 +16,6 @@ place. Run it after a while to see whether the block has decayed.
 Usage:  python3 scripts/probe_fetch.py [YYYY-MM-DD]   (default: today, ET)
 """
 import json
-import os
 import re
 import sys
 import urllib.parse
@@ -42,10 +41,7 @@ def _words(html):
 def probe(url):
     """One proxy fetch. Returns (verdict, detail)."""
     pu = f"{SUPABASE_URL}/functions/v1/fetch-proxy?url=" + urllib.parse.quote(url, safe="")
-    secret = os.environ.get("AUDIT_PIPELINE_SECRET")
-    if not secret:
-        raise RuntimeError("AUDIT_PIPELINE_SECRET is required for the article proxy")
-    req = urllib.request.Request(pu, headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}", "x-audit-secret": secret})
+    req = urllib.request.Request(pu, headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}"})
     try:
         with urllib.request.urlopen(req, timeout=90) as r:
             d = json.load(r)
