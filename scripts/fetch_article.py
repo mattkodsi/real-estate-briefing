@@ -9,6 +9,7 @@ main article container and strips attributes except img src/alt. Used by the dai
 scheduled task to populate each story's "content" field for the in-app reader.
 """
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -264,7 +265,10 @@ def _fetch_via_proxy(url: str) -> tuple[str, str]:
     not Supabase's. The proxy forwards the TRD cookie and follows redirects, and
     reports the post-redirect `finalUrl` so we can credit the real publisher."""
     pu = f"{SUPABASE_URL}/functions/v1/fetch-proxy?url=" + urllib.parse.quote(url, safe="")
-    req = urllib.request.Request(pu, headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}"})
+    secret = os.environ.get("AUDIT_PIPELINE_SECRET")
+    if not secret:
+        raise RuntimeError("AUDIT_PIPELINE_SECRET is required for the article proxy")
+    req = urllib.request.Request(pu, headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}", "x-audit-secret": secret})
     with urllib.request.urlopen(req, timeout=60) as resp:
         doc = json.load(resp)
     if doc.get("html"):

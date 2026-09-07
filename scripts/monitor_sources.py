@@ -25,13 +25,14 @@ surfaces it immediately instead of weeks later.
 
 Usage:  python3 scripts/monitor_sources.py [--days N] [--no-push] [--force]
 """
-import json, re, sys, urllib.request
+import json, os, re, sys, urllib.request
 from urllib.parse import urlparse
 from collections import defaultdict
 from datetime import datetime, timezone
 
 # ---- creds (read from push_data.py, same as the scanners) --------------------
-_src = open(__file__.rsplit("/", 1)[0] + "/push_data.py").read()
+with open(__file__.rsplit("/", 1)[0] + "/push_data.py") as source:
+    _src = source.read()
 URL = re.search(r"https://[a-z0-9]+\.supabase\.co", _src).group(0)
 KEY = re.search(r"sb_publishable_[A-Za-z0-9_-]+", _src).group(0)
 _H = {"apikey": KEY, "Authorization": f"Bearer {KEY}"}
@@ -73,6 +74,11 @@ def _dom(u):
 
 def _post(path, body, extra=None):
     h = dict(_H); h["Content-Type"] = "application/json"
+    if path.startswith("functions/v1/"):
+        secret = os.environ.get("AUDIT_PIPELINE_SECRET")
+        if not secret:
+            raise RuntimeError("AUDIT_PIPELINE_SECRET is required for pipeline notifications")
+        h["x-audit-secret"] = secret
     if extra:
         h.update(extra)
     req = urllib.request.Request(f"{URL}/{path}", data=json.dumps(body).encode(), headers=h, method="POST")

@@ -8,10 +8,12 @@
 //   3. watchlist  — a watched player mentioned today → that profile
 //   4. events     — a starred calendar event dated today (from ~8 AM ET)
 //
-// Every send is recorded in push_log first-writer-wins, so idempotent pipeline
-// rebuilds can never double-ping a phone. Quiet overnight: nothing sends
+// Every event/device pair is durably queued, atomically leased and marked sent
+// only after provider acceptance. Explicit failures retry with backoff. Quiet overnight: nothing sends
 // 9 PM–7 AM ET; unlogged items simply go out on the first morning run.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
+import { drainDeliveries } from "../_shared/audit-delivery.mjs";
 import * as webpush from "jsr:@negrel/webpush@0.3.0";
 
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -20,19 +22,19 @@ const HEADERS = { "Content-Type": "application/json" };
 const CONTACT = "mailto:mfkodsi@gmail.com";
 
 async function sb(path: string, init: RequestInit = {}): Promise<Response> {
-  return await fetch(`${SB_URL}/rest/v1/${path}`, {
+  const response = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
                "Content-Type": "application/json", Prefer: "resolution=merge-duplicates",
                ...(init.headers || {}) },
   });
+  if (!response.ok) throw new Error(`Database request failed (${response.status})`);
+  return response;
 }
-
-function b64urlToBytes(s: string): Uint8Array {
-  s = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) s += "=";
-  const bin = atob(s);
-  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+async function rpc(name: string, body: Record<string, unknown>): Promise<any> {
+  const response = await sb(`rpc/${name}`, {method:"POST",body:JSON.stringify(body)});
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
 async function loadServer(): Promise<InstanceType<typeof webpush.ApplicationServer> | null> {
@@ -55,7 +57,8 @@ function nowET(): { date: string; hour: number } {
   return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: parseInt(get("hour")) % 24 };
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req: Request) => {
+  const denied = denyUnlessAuthorized(req); if (denied) return denied;
   try {
     const { date: today, hour } = nowET();
     // quiet overnight — everything unlogged goes out on the first morning run
@@ -71,9 +74,6 @@ Deno.serve(async () => {
     for (const r of subRows || []) {
       if (r?.sub?.endpoint && !r.sub.disabled) subscribed.add(r.profile);
     }
-    if (!subscribed.size) {
-      return new Response(JSON.stringify({ ok: true, note: "no subscribed devices" }), { headers: HEADERS });
-    }
     const notifOf = (p: string) =>
       (prefRows || []).find((r: { profile: string }) => r.profile === p)?.data?.notifications || {};
     const server = await loadServer();
@@ -81,27 +81,8 @@ Deno.serve(async () => {
       return new Response(JSON.stringify({ ok: true, note: "vapid not set up" }), { headers: HEADERS });
     }
 
-    const loggedIds = new Set<string>(
-      ((await (await sb("push_log?select=id&order=created_at.desc&limit=2000")).json()) || [])
-        .map((r: { id: string }) => r.id),
-    );
-    const log = (id: string) =>
-      sb("push_log", { method: "POST", body: JSON.stringify({ id }) });
-
     const deliver = async (profiles: string[], payload: Record<string, unknown>) => {
-      const q = `push_subs?select=id,sub&profile=in.(${profiles.map((p) => `"${p}"`).join(",")})`;
-      const subs = await (await sb(q)).json();
-      for (const row of subs || []) {
-        if (!row?.sub?.endpoint || row.sub.disabled) continue;
-        try {
-          await server.subscribe(row.sub).pushTextMessage(JSON.stringify(payload), {});
-        } catch (e) {
-          const status = (e as { response?: { status?: number } })?.response?.status ?? 0;
-          if (status === 404 || status === 410) {
-            await sb(`push_subs?id=eq.${encodeURIComponent(row.id)}`, { method: "DELETE" });
-          }
-        }
-      }
+      if(profiles.length) await rpc("audit_enqueue_push", {p_event:payload.tag,p_profiles:profiles,p_payload:payload});
     };
 
     const dayRows = await (await sb(`days?date=eq.${today}&select=data`)).json();
@@ -112,9 +93,7 @@ Deno.serve(async () => {
     for (const s of day?.stories || []) {
       if (s.cadence !== "special") continue;
       const id = `spec:${today}:${s.id}`;
-      if (loggedIds.has(id)) continue;
       const to = [...subscribed].filter((p) => notifOf(p).breaking !== false);
-      await log(id); // first-writer-wins before the send: reruns can't double-ping
       if (to.length) {
         await deliver(to, {
           title: `⚡ ${s.title}`,
@@ -129,9 +108,8 @@ Deno.serve(async () => {
     // 2) briefing ready — opt-IN only (notifications.ready === true)
     if (day && (day.stories || []).length) {
       const id = `ready:${today}`;
-      if (!loggedIds.has(id)) {
+      {
         const to = [...subscribed].filter((p) => notifOf(p).ready === true);
-        await log(id);
         if (to.length) {
           await deliver(to, {
             title: "Today's briefing is ready",
@@ -163,25 +141,8 @@ Deno.serve(async () => {
           ({ name: row.data.name, id: m.id, title: m.title })));
       }
       for (const [profile, slugs] of watchers) {
-        const fresh: { name: string; id: string; title: string }[] = [];
-        for (const slug of slugs) {
-          for (const m of todayMentions.get(slug) || []) {
-            const id = `watch:${profile}:${today}:${slug}:${m.id}`;
-            if (loggedIds.has(id)) continue;
-            await log(id);
-            fresh.push(m);
-          }
-        }
-        if (fresh.length) {
-          const names = [...new Set(fresh.map((f) => f.name))];
-          await deliver([profile], {
-            title: `${names.slice(0, 2).join(" and ")}${names.length > 2 ? ` +${names.length - 2}` : ""} in today's briefing`,
-            body: fresh[0].title,
-            url: fresh.length === 1 ? `./#/story/${today}/${fresh[0].id}` : "./",
-            tag: `watch:${profile}:${today}`,
-          });
-          sentIds.push(`watch:${profile}:${today}(${fresh.length})`);
-        }
+        const items = slugs.flatMap(slug => (todayMentions.get(slug) || []).map(m => ({...m,slug})));
+        if(items.length) await rpc("audit_enqueue_watch", {p_profile:profile,p_day:today,p_items:items});
       }
     }
 
@@ -196,8 +157,6 @@ Deno.serve(async () => {
           for (const ev of todays) {
             if (!stars.includes(ev.id)) continue;
             const id = `event:${r.profile}:${ev.id}`;
-            if (loggedIds.has(id)) continue;
-            await log(id);
             await deliver([r.profile], {
               title: `Today: ${ev.data.title}`,
               body: ev.data.market && ev.data.market !== "National" ? ev.data.market : "",
@@ -210,7 +169,10 @@ Deno.serve(async () => {
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, date: today, sent: sentIds }), { headers: HEADERS });
+    const delivery = await drainDeliveries(rpc, async (job: {sub: Parameters<InstanceType<typeof webpush.ApplicationServer>["subscribe"]>[0];payload: Record<string,unknown>}) => {
+      await server.subscribe(job.sub).pushTextMessage(JSON.stringify(job.payload), {});
+    });
+    return new Response(JSON.stringify({ ok: true, date: today, queued: sentIds, ...delivery }), { headers: HEADERS });
   } catch (e) {
     return new Response(JSON.stringify({ ok: false, error: String(e).slice(0, 300) }), { headers: HEADERS });
   }
