@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 // fill-content: serverless STANDBY content-filler (layer 4 of the failover chain).
 //
 // A pg_cron job (fill-heartbeat-standby, every 15 min) invokes this function.
@@ -14,6 +15,8 @@
 //
 // GET/POST ?date=YYYY-MM-DD (default today ET) &force=1 (skip standby check)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { safeFetch } from "../_shared/audit-fetch.mjs";
+import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
 import { parseHTML } from "https://esm.sh/linkedom@0.18.5/worker";
 
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -112,18 +115,24 @@ function extract(html: string): { ok: boolean; html: string; words: number; imag
 }
 
 async function sb(path: string, init: RequestInit = {}): Promise<Response> {
-  return await fetch(`${SB_URL}/rest/v1/${path}`, {
+  const response = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
                "Content-Type": "application/json", Prefer: "resolution=merge-duplicates",
                ...(init.headers || {}) },
   });
+  if (!response.ok) throw new Error(`Database request failed (${response.status})`);
+  return response;
+}
+async function rpc(name: string, body: Record<string, unknown>): Promise<any> {
+  const response = await sb(`rpc/${name}`, {method:"POST",body:JSON.stringify(body)});
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
 async function sessionCookie(hostname: string): Promise<string | null> {
   const h = hostname.toLowerCase().replace(/^www\./, "");
-  const parts = h.split(".");
-  const domain = parts.length >= 2 ? parts.slice(-2).join(".") : h;
+  const domain = h; // Exact stored host only; never guess public suffix boundaries.
   const ids = [`session_${domain}`];
   if (domain === "therealdeal.com") ids.push("trd_session");
   for (const id of ids) {
@@ -148,6 +157,7 @@ function todayET(): string {
 }
 
 Deno.serve(async (req: Request) => {
+  const denied = denyUnlessAuthorized(req); if (denied) return denied;
   const params = new URL(req.url).searchParams;
   const date = params.get("date") || todayET();
   const force = params.get("force") === "1";
@@ -170,10 +180,12 @@ Deno.serve(async (req: Request) => {
   const day = dayRows?.[0]?.data;
   if (!day) return new Response(JSON.stringify({ ok: true, note: `no day for ${date}` }), { headers: HEADERS });
 
+  const expected = structuredClone(day);
   const stories: Record<string, unknown>[] = day.stories || [];
   const wordsIn = (h: unknown) => wordsOf(String(h || "").replace(/<[^>]+>/g, " "));
-  const targets = stories.filter((s) =>
-    wordsIn(s.content) < MIN_WORDS && s.url).slice(0, BATCH);
+  const candidates = stories.filter((s) => wordsIn(s.content) < MIN_WORDS && s.url);
+  const claims = await rpc("audit_claim_fill", {p_day:date,p_candidates:candidates,p_limit:BATCH});
+  const targets = claims.map((c: {story_id:string;source_url:string}) => candidates.find(s => String(s.id) === c.story_id && s.url === c.source_url)).filter(Boolean);
   if (!targets.length) {
     return new Response(JSON.stringify({ ok: true, note: "nothing to fill" }), { headers: HEADERS });
   }
@@ -182,14 +194,12 @@ Deno.serve(async (req: Request) => {
   for (const s of targets) {
     try {
       const u = new URL(String(s.url));
-      const h: Record<string, string> = { "User-Agent": UA, "Accept": "text/html,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9" };
-      const cookie = await sessionCookie(u.hostname);
-      if (cookie) h["Cookie"] = cookie;
-      const res = await fetch(u.href, { headers: h, redirect: "follow" });
-      const html = await res.text();
+      const res = await safeFetch(u.href, {cookie: await sessionCookie(u.hostname)});
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = res.html;
       const out = extract(html);
-      if (res.url && isWrapper(String(s.url)) && !isWrapper(res.url)) {
-        const f = new URL(res.url);
+      if (res.finalUrl && isWrapper(String(s.url)) && !isWrapper(res.finalUrl)) {
+        const f = new URL(res.finalUrl);
         s.url = `${f.protocol}//${f.host}${f.pathname}`; // canonical publisher URL
       }
       if (out.ok && out.words > wordsIn(s.content)) {
@@ -207,7 +217,8 @@ Deno.serve(async (req: Request) => {
 
   if (filled.length) {
     day.generatedAt = new Date().toISOString().replace(/\.\d+Z$/, "Z");
-    await sb("days", { method: "POST", body: JSON.stringify({ date: day.date, data: day, generated_at: day.generatedAt }) });
+    const published = await rpc("audit_publish_fill", {p_day:date,p_expected:expected,p_data:day});
+    if (!published) return new Response(JSON.stringify({ok:true,date,conflict:true,filled:[],failed}),{headers:HEADERS});
     // pulse ONLY on progress — a no-op standby must not mask a dead primary
     await sb("secrets", { method: "POST", body: JSON.stringify({ id: "fill_heartbeat", data: {
       lastRun: new Date().toISOString().replace(/\.\d+Z$/, "Z"),

@@ -1,0 +1,11 @@
+# Each public entrypoint authenticates its own caller before privileged work.
+[functions.reader-profile]
+verify_jwt = false
+[functions.fetch-proxy]
+verify_jwt = false
+[functions.fill-content]
+verify_jwt = false
+[functions.push-send]
+verify_jwt = false
+[functions.push-dispatch]
+verify_jwt = false

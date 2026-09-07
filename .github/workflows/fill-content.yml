@@ -44,4 +44,6 @@ jobs:
         run: playwright install --with-deps chromium
 
       - name: Fill missing content
+        env:
+          AUDIT_PIPELINE_SECRET: ${{ secrets.AUDIT_PIPELINE_SECRET }}
         run: python scripts/fill_browser.py ${{ github.event.inputs.date }}
