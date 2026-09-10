@@ -158,7 +158,7 @@ Also include any other newsletter that is clearly real-estate news. Skip welcome
 
 ## Web push (server-side — no action from the routine)
 
-The app's alerts (breaking-story pushes, watched-player pushes, starred-event reminders) are handled entirely by the `push-dispatch` Supabase edge function on a pg_cron schedule (every 10 min): it watches the PUBLISHED data and delivers via web push (`push-send`, VAPID keys in the `secrets` row `vapid`; subscriptions in `push_subs`; dedupe ledger in `push_log` — never double-sends across idempotent rebuilds). The routine changes nothing about its own behavior — it just publishes; marking a story `cadence: "special"` is what makes it push-eligible, so reserve `special` for genuinely breaking one-off blasts.
+The app's alerts (breaking-story pushes, watched-player pushes, starred-event reminders) are handled entirely by the `push-dispatch` Supabase edge function on a pg_cron schedule (every 10 min): it watches the PUBLISHED data and delivers via web push (`push-send`, VAPID keys in the `secrets` row `vapid`; subscriptions in `push_subs`; dedupe ledger in `push_log` — never double-sends across idempotent rebuilds). The routine changes nothing about its own behavior — it just publishes; marking a story `cadence: "special"` is what makes it push-eligible, so reserve `special` for genuinely breaking one-off blasts. **When you mark a story `special`, also write its `pushTitle` AND `pushBody`** (schema above) — a crafted ≤24-char micro-headline and a crafted ≤160-char one-sentence body. Apple's notification title line is very tight (~20–24 chars visible before it clips) and its body shows ~4 lines, so raw `title`/`summary` truncate with an ellipsis; purpose-written short ones read whole. The dispatcher prefixes a deal-type glyph to `pushTitle`; both fall back to auto-trimmed `title`/`summary` if omitted, but for `special` stories always write them.
 
 ## Notifications (every run, every window)
 
@@ -184,6 +184,8 @@ The test: *would the user, opening the app, see something new?* If no, finish si
     {
       "id": "kebab-slug",
       "title": "headline",
+      "pushTitle": "special-cadence stories ONLY: a crafted ≤24-char micro-headline for the phone push notification — punchy and complete, e.g. 'Fortress seizes campus', 'Pebb lands $223M refi'. NOT a truncation of `title`: write it fresh so it reads whole at a glance. The notification renders it as `<deal-type glyph> <pushTitle>` (the glyph is auto-derived from `dealType` — 💰 Financing, 📉 Distress, ⚖️ Legal, 🏛️ Policy, 🔑 Sale, 🏗️ Development, 📝 Lease, 🏢 Industry, 📊 Markets). Omit for non-special stories; if omitted, the dispatcher falls back to a word-trimmed `title`.",
+      "pushBody": "special-cadence stories ONLY: a crafted push-notification body — one complete, self-contained sentence, ≤160 chars, that reads whole with no cut-off. Write it fresh for the notification (it may differ from `summary`); lead with the concrete who/what/how-much. The dispatcher shows it under `pushTitle`. Omit for non-special stories; if omitted, it auto-trims `summary` to a clean clause. (A body over ~160 still fully displays in the lock-screen/expanded view but the brief pop-in banner shows ~2 lines — keep it tight to read whole everywhere.)",
       "summary": "1–2 sentences, concrete (names, numbers), in your own words",
       "section": "New York | Capital Markets | Residential | Development | Policy | Tech | ...",
       "sources": ["newsletter name(s)"],

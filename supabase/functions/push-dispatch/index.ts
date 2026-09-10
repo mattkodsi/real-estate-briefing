@@ -57,6 +57,43 @@ function nowET(): { date: string; hour: number } {
   return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: parseInt(get("hour")) % 24 };
 }
 
+// --- Notification text: sized so Apple never truncates or ellipsizes ----------
+// A deal-type glyph carries the "kind" in place of a word; the routine supplies a
+// crafted short pushTitle per breaking story (we trim the headline as a fallback).
+const TYPE_ICON: Record<string, string> = {
+  Sale: "🔑", Financing: "💰", Lease: "📝", Development: "🏗️", Distress: "📉",
+  Legal: "⚖️", Policy: "🏛️", Industry: "🏢", Markets: "📊",
+};
+// Trim to a whole word, never mid-word, never a trailing "…".
+function clip(s: string, max: number): string {
+  s = (s || "").replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  let cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  if (sp > 0) cut = cut.slice(0, sp);
+  return cut.replace(/[\s.,;:—–-]+$/, "");
+}
+// Body: a whole short summary as-is, else clipped to end on a clean clause
+// boundary (comma/dash) with any dangling connective/article dropped.
+function bodyText(s: string, max = 170): string {
+  s = (s || "").replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  let cut = s.slice(0, max);
+  cut = cut.slice(0, cut.lastIndexOf(" "));
+  const cb = Math.max(cut.lastIndexOf(", "), cut.lastIndexOf("; "),
+    cut.lastIndexOf(" -- "), cut.lastIndexOf(" — "), cut.lastIndexOf(" – "));
+  if (cb > max * 0.5) cut = cut.slice(0, cb);
+  cut = cut.replace(/[\s.,;:—–-]+$/, "");
+  cut = cut.replace(/\s+(?:a|an|the|of|to|and|or|with|for|in|on|at|its|from|by|as|that|which|after|before|not)$/i, "");
+  return cut;
+}
+// Breaking heading: deal-type glyph + crafted micro-headline (or trimmed headline).
+function breakingTitle(s: { dealType?: string; pushTitle?: string; title?: string }): string {
+  const icon = TYPE_ICON[s.dealType || ""] || "⚡";
+  const head = (s.pushTitle && s.pushTitle.trim()) || clip(s.title || "", 26);
+  return `${icon} ${head}`;
+}
+
 Deno.serve(async (req: Request) => {
   const denied = denyUnlessAuthorized(req); if (denied) return denied;
   try {
@@ -96,8 +133,8 @@ Deno.serve(async (req: Request) => {
       const to = [...subscribed].filter((p) => notifOf(p).breaking !== false);
       if (to.length) {
         await deliver(to, {
-          title: `⚡ ${s.title}`,
-          body: s.summary || "",
+          title: breakingTitle(s),
+          body: bodyText(s.pushBody || s.summary || ""),
           url: `./#/story/${today}/${s.id}`,
           tag: id,
         });
@@ -113,7 +150,7 @@ Deno.serve(async (req: Request) => {
         if (to.length) {
           await deliver(to, {
             title: "Today's briefing is ready",
-            body: (day.overview || "").slice(0, 140),
+            body: bodyText(day.overview || ""),
             url: "./",
             tag: id,
           });
@@ -158,7 +195,7 @@ Deno.serve(async (req: Request) => {
             if (!stars.includes(ev.id)) continue;
             const id = `event:${r.profile}:${ev.id}`;
             await deliver([r.profile], {
-              title: `Today: ${ev.data.title}`,
+              title: `Today: ${clip(ev.data.title || "", 24)}`,
               body: ev.data.market && ev.data.market !== "National" ? ev.data.market : "",
               url: "./",
               tag: id,
