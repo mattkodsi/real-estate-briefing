@@ -37,6 +37,24 @@ test('synthetic handlers: no real services or credentials',async t=>{
   const response=await handler(new Request('https://example.invalid'));const data=await response.json();
   assert.equal(data.treasury['10Y'],4.2);assert.equal(data.stale,true);assert.ok(calls>1);
  });
+ await t.test('rates retains lastgood when SOFR regresses or averages are incomplete',async()=>{
+  const old={curveDate:'2026-09-10',sofr:{date:'2026-09-10',rate:4.5},sofrAverages:{'30d':4.4,'90d':4.3,'180d':4.2,date:'2026-09-10'},forward:[]};
+  const xml='<entry><d:NEW_DATE>2026-09-11</d:NEW_DATE>'+['1MONTH','3MONTH','6MONTH','1YEAR','2YEAR','5YEAR','10YEAR','30YEAR'].map(t=>`<d:BC_${t}>4.0</d:BC_${t}>`).join('')+'</entry>';
+  for(const fault of ['sofr-date','average-date','missing-average','missing-sofr-date']) {
+   let writes=0;
+   const handler=await load('rates-live',async(url,init)=>{
+    if(url.includes('/rates_cache?'))return reply([{data:old,generated_at:'2000-01-01'}]);
+    if(url.endsWith('/rates_cache')){writes++;return reply({});}
+    if(url.includes('treasury.gov'))return new Response(xml);
+    if(url.includes('/sofr/'))return reply({refRates:[{effectiveDate:fault==='missing-sofr-date'?undefined:fault==='sofr-date'?'2026-09-01':'2026-09-11',percentRate:4.0}]});
+    if(url.includes('/sofrai/'))return reply({refRates:[{effectiveDate:fault==='average-date'?'2026-09-01':'2026-09-11',average30day:4.0,average90day:fault==='missing-average'?undefined:4.1,average180day:4.2}]});
+    throw Error('Unexpected mocked URL '+url);
+   });
+   const data=await (await handler(new Request('https://example.invalid'))).json();
+   assert.equal(writes,0,fault);assert.equal(data.stale,true,fault);
+   assert.deepEqual(data.sofr,old.sofr,fault);assert.deepEqual(data.sofrAverages,old.sofrAverages,fault);
+  }
+ });
  await t.test('market partial refresh retains individual series and failed cache writes are surfaced',async()=>{
   const old={national:{ust2y:{latest:{date:'2026-09-01',value:3}}},metros:{'New York':{rent:{latest:{date:'2026-08-01',value:4000}}}}};let written;
   const handler=await load('market-pulse',async(url,init)=>{

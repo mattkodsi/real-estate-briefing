@@ -1,6 +1,6 @@
 // Live rates proxy v6: forward path extended to 5Y+ nodes for horizon toggles.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { checkedFetch, mergeMarket } from "../_shared/backend-policy.mjs";
+import { checkedFetch } from "../_shared/backend-policy.mjs";
 
 const TENORS: Record<string, string> = {
   "1M": "BC_1MONTH", "2M": "BC_2MONTH", "3M": "BC_3MONTH", "4M": "BC_4MONTH",
@@ -139,7 +139,21 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify(stale.data), { headers: HEADERS });
     }
     const fresh = await build();
-    if (stale?.data?.curveDate && fresh.curveDate < String(stale.data.curveDate)) throw new Error("Regressed Treasury date");
+    const validDate = (value: unknown) => typeof value === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) &&
+      new Date(value).toISOString().slice(0, 10) === value;
+    const oldSofr = stale?.data?.sofr as { date?: string } | undefined;
+    const oldAverages = stale?.data?.sofrAverages as { date?: string } | undefined;
+    for (const [label, currentDate, previousDate] of [
+      ["Treasury", fresh.curveDate, stale?.data?.curveDate],
+      ["SOFR", fresh.sofr.date, oldSofr?.date],
+      ["SOFR averages", fresh.sofrAverages.date, oldAverages?.date],
+    ]) {
+      if (!validDate(currentDate)) throw new Error(`Missing or invalid ${label} date`);
+      if (previousDate && String(currentDate) < String(previousDate)) throw new Error(`Regressed ${label} date`);
+    }
+    if (!["30d", "90d", "180d"].every(period => Number.isFinite(fresh.sofrAverages[period])))
+      throw new Error("Incomplete SOFR averages");
     if (!["1M","3M","6M","1Y","2Y","5Y","10Y","30Y"].every(t=>Number.isFinite(fresh.treasury[t]))) throw new Error("Incomplete Treasury curve");
     await writeCache(fresh);
     return new Response(JSON.stringify(fresh), { headers: HEADERS });
