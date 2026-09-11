@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v150";
+const APP_VERSION = "v151";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -6301,15 +6301,36 @@ function syncMastheadOffset() {
   wireMastAutohide();
 }
 
-/* Auto-hide the wordmark/icons row on scroll-down (the rate strip stays), so the
-   feed gets the vertical room back. Scrolling up or reaching the top brings it
-   back — the iOS toolbar pattern. Collapsing .masthead-row shrinks the masthead,
-   the ResizeObserver above re-measures --mast-h, and the feed rises to fill the
-   freed space for free. Updated look only. */
+/* Slide both bars out on downward scrolling and back on upward scrolling.
+   Keep layout space and horizontal centering intact; ignore iOS rubber-banding. */
 let mastAutohideWired = false;
 function wireMastAutohide() {
-  // Keep both bars anchored; hiding one while moving the other breaks orientation.
-  document.documentElement.classList.remove("mast-hidden");
+  if (mastAutohideWired) return;
+  mastAutohideWired = true;
+  let lastY = window.scrollY, travel = 0, ticking = false;
+  const apply = () => {
+    ticking = false;
+    const root = document.documentElement;
+    const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const y = Math.max(0, Math.min(window.scrollY, maxY));
+    const delta = y - lastY;
+    lastY = y;
+    if (root.dataset.look !== "updated" || document.body.classList.contains("reader-open") || y <= 52) {
+      root.classList.remove("mast-hidden");
+      travel = 0;
+      return;
+    }
+    if (!delta) return;
+    // Accumulate slow finger movement too, without reacting to tiny reversals.
+    travel = Math.sign(delta) === Math.sign(travel) ? travel + delta : delta;
+    if (travel > 6) root.classList.add("mast-hidden");
+    else if (travel < -6) root.classList.remove("mast-hidden");
+  };
+  window.addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(apply);
+  }, { passive: true });
 }
 
 /* Pre-warm: the "jump"/clip on a view's FIRST open is really a first-render

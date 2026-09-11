@@ -3426,7 +3426,7 @@ button.cal-open:active { background: var(--rule); }
   transform: translateX(-50%) translateY(-101%) translateZ(0);
 }
 :root[data-look="updated"].mast-hidden #bottom-nav {
-  transform: translate(-50%, calc(100% + 28px));
+  transform: translate(-50%, calc(100% + 28px + env(safe-area-inset-bottom)));
   opacity: 0;
   pointer-events: none;
 }
@@ -3702,9 +3702,6 @@ a:focus-visible, button:focus-visible, select:focus-visible, [tabindex]:focus-vi
 :root[data-look="updated"] #lede-block { gap:0; margin:4px 0 16px; }
 :root[data-look="updated"] #kp-col { padding:12px 14px; }
 #key-points li { padding-top:6px; padding-bottom:6px; }
-/* Never replace the horizontal centering transform when scrolling. */
-:root[data-look="updated"].mast-hidden .masthead { transform:translateX(-50%) translateZ(0); }
-:root[data-look="updated"].mast-hidden #bottom-nav { transform:translateX(-50%); opacity:1; pointer-events:auto; }
 :root[data-look="updated"] #bottom-nav { padding:5px 6px; border-radius:22px; }
 :root[data-look="updated"] #bottom-nav a { font-size:10px; line-height:18px; padding:9px 1px; letter-spacing:0; text-transform:none; }
 body.reader-open #bn-layer { visibility:hidden; }
