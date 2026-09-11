@@ -30,7 +30,7 @@
 
   <header class="masthead">
     <div class="masthead-row">
-      <a class="wordmark" href="#/"><span class="wm-full">Real Estate&nbsp;Briefing</span><span class="wm-short">CRE&nbsp;Briefing</span></a>
+      <a class="wordmark" href="#/" title="Settings · Latest briefing"><span class="wm-full">Real Estate&nbsp;Briefing</span><span class="wm-short">CRE&nbsp;Briefing</span></a>
       <div class="masthead-right">
         <nav class="date-nav" id="date-nav" aria-label="Change day">
           <button id="prev-day" class="nav-arrow" aria-label="Previous day">‹</button>
@@ -44,7 +44,7 @@
           </svg>
           <span id="bell-dot" class="bell-dot" hidden></span>
         </button>
-        <button id="search-btn" class="icon-btn" aria-label="Search" title="Search">
+        <button id="search-btn" class="icon-btn" aria-label="Search and saved stories" title="Search and saved stories">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="11" cy="11" r="7"></circle>
             <path d="M21 21l-4.35-4.35"></path>
@@ -72,19 +72,17 @@
     <!-- Briefing -->
     <section id="view-briefing" class="view" hidden>
       <p id="empty-state" hidden></p>
-      <nav class="edition-links" aria-label="Your briefing"><a href="#/search" id="saved-shortcut">Saved stories</a><a href="#/status">Settings &amp; status</a></nav>
-      <details id="lede-block" hidden>
-        <summary class="edition-summary">Today’s big picture <span>Overview, key points &amp; upcoming dates</span></summary>
+      <div id="lede-block" hidden>
         <div class="lede-col" id="overview-col">
-          <div class="lede-kicker">The Big Picture</div>
+          <div class="lede-kicker">Overview</div>
           <p id="lede"></p>
         </div>
         <div class="lede-col" id="kp-col">
-          <div class="lede-kicker" id="kp-kicker">Key Points</div>
+          <div class="lede-kicker" id="kp-kicker">In brief</div>
           <ul id="key-points"></ul>
         </div>
         <div id="watch-row" hidden></div>
-      </details>
+      </div>
       <div id="controls" class="controls" hidden></div>
       <div id="feed"></div>
       <p id="day-notes" hidden></p>

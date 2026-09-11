@@ -288,7 +288,18 @@ async function init() {
   // footer). From an older day it still snaps back to today first.
 
 
-  $("search-btn").addEventListener("click", () => { location.hash = "/search"; });
+  document.querySelector(".wordmark").addEventListener("click", (e) => {
+    e.preventDefault();
+    const latest = state.frontDate || state.dates[state.dates.length - 1] || null;
+    const h = location.hash;
+    const onBriefing = h === "" || h === "#/" || h.startsWith("#/day/");
+    if (onBriefing && state.currentDate === latest) { location.hash = "/status"; return; }
+    state.currentDate = latest;
+    if (h === "" || h === "#/") route(); // hash unchanged → no hashchange event
+    else location.hash = "/";
+  });
+
+  $("search-btn").addEventListener("click", () => { state.searchQuery = ""; if(location.hash === "#/search") route(); else location.hash = "/search"; });
   $("bell-btn").addEventListener("click", () => { location.hash = "/alerts"; });
   paintBellDot();
   try { navigator.clearAppBadge?.(); } catch { /* unsupported */ }
@@ -382,20 +393,23 @@ async function init() {
   let rt = null;
   const READER_EDGE = 28;                                  // left-edge zone → "back out to briefing"
   reader.addEventListener("touchstart", (e) => {
-    if (e.touches.length !== 1) { rt = null; return; }
+    if (e.touches.length !== 1) { cancelReaderCarousel(true); rt = null; return; }
+    if (readerCarousel?.settling) { rt = null; return; }
     const x = e.touches[0].clientX;
     // a swipe that STARTS at the far-left edge is an exit gesture (iOS back); a
     // swipe that starts in the content is article navigation. This spatial zoning
     // is what keeps "leave the article" and "flip to the next article" from ever
     // firing on the same drag.
-    rt = { x, y: e.touches[0].clientY, dx: 0, dy: 0, axis: null, edge: x <= READER_EDGE };
+    rt = { x, y: e.touches[0].clientY, dx: 0, dy: 0, axis: null, edge: x <= READER_EDGE, lastX:x, lastAt:performance.now(), velocity:0 };
   }, { passive: true });
   const READER_NAV = 55;                                   // px to commit to prev/next
   const READER_EXIT = 70;                                  // px of edge-drag to commit to exit
   reader.addEventListener("touchmove", (e) => {
     if (!rt) return;
     if (peekActive) return; // a hold-peek (inline link) owns the finger — stand down
-    rt.dx = e.touches[0].clientX - rt.x;
+    const now=performance.now(), touchX=e.touches[0].clientX;
+    rt.velocity=(touchX-rt.lastX)/Math.max(1,now-rt.lastAt);rt.lastX=touchX;rt.lastAt=now;
+    rt.dx = touchX - rt.x;
     rt.dy = e.touches[0].clientY - rt.y;
     if (!rt.axis && (Math.abs(rt.dx) > 10 || Math.abs(rt.dy) > 10)) {
       if (Math.abs(rt.dy) > Math.abs(rt.dx) && rt.dy > 0 && reader.scrollTop <= 0) rt.axis = "close";
@@ -423,17 +437,15 @@ async function init() {
         reader.style.transform = `translateX(${d}px)`;
         reader.style.opacity = "1";
       } else {
-        // NAVIGATION zone (content): keep the single reader STATIC and fully opaque
-        // while dragging — translating it here would bare the briefing behind it.
-        // On release, an opaque two-panel carousel does the actual move.
-        reader.style.transform = "";
-        reader.style.opacity = "1";
+        // Both opaque pages follow the finger at 1:1 displacement.
+        readerDragPages(rt.dx);
       }
     }
   }, { passive: false });
   const readerTouchEnd = () => {
     if (!rt) return;
     const { axis, dx, dy, edge } = rt;
+    const velocity=performance.now()-rt.lastAt<100?rt.velocity:0;
     rt = null;
     if (axis === "x") {
       const adx = Math.abs(dx);
@@ -443,11 +455,12 @@ async function init() {
       reader.style.opacity = "";
       if (edge) {                               // EXIT zone: rightward drag off the left edge
         if (dx > READER_EXIT) return readerSwipeExit();
-      } else if (dx < 0 && hasNext && adx > READER_NAV) {
-        return readerSwipeStep(1);              // content swipe left → next
-      } else if (dx > 0 && hasPrev && adx > READER_NAV) {
-        return readerSwipeStep(-1);             // content swipe right → previous
+      } else if (dx < 0 && hasNext && (adx > READER_NAV || (adx > 12 && velocity < -.45))) {
+        return readerSwipeStep(1,velocity);              // content swipe left → next
+      } else if (dx > 0 && hasPrev && (adx > READER_NAV || (adx > 12 && velocity > .45))) {
+        return readerSwipeStep(-1,velocity);             // content swipe right → previous
       }
+      if (!edge) { cancelReaderCarousel(); return; }
       // under threshold (or a wall) → glide back to center
       reader.style.transition = "transform .3s cubic-bezier(.22,1.08,.36,1)";
       reader.style.transform = ""; reader.style.opacity = "";
@@ -468,7 +481,8 @@ async function init() {
     }
   };
   reader.addEventListener("touchend", readerTouchEnd, { passive: true });
-  reader.addEventListener("touchcancel", readerTouchEnd, { passive: true });
+  reader.addEventListener("touchcancel", () => { rt=null; cancelReaderCarousel(); reader.style.transform=""; }, { passive:true });
+  window.addEventListener("resize", () => cancelReaderCarousel(true));
   // scroll memory + "~N min left"
   reader.addEventListener("scroll", onReaderScroll, { passive: true });
   // TTS playback of the open story
@@ -1117,6 +1131,7 @@ function route() {
   // would reset the transform and snap the flung card back down)
   if (sheet && !sheet.hidden && !sheetFlinging) closeSheet();
   const h = location.hash;
+  if (!h.startsWith("#/story/")) cancelReaderCarousel(true);
   // a re-render of the SAME view (opening a chart, an auto-refresh, a filter) must
   // hold your scroll position; only a real navigation to a different view resets it
   const sameView = h === lastRouteHash;
@@ -1272,9 +1287,11 @@ async function renderBriefing(date) {
   empty.hidden = true;
 
   const hasOverview = !!day.overview;
-  const kps = day.keyPoints || [];
-  $("lede-block").hidden = !hasOverview && !kps.length;
-  $("overview-col").hidden = !hasOverview;
+  const ranked = day.stories || [];
+  const featured = ranked.filter(s => s.featured);
+  const kps = (featured.length ? featured : ranked).slice(0,5).map(s => ({text:s.quickSummary || s.title,id:s.id}));
+  $("lede-block").hidden = !kps.length;
+  $("overview-col").hidden = true;
   $("lede").textContent = decodeEntities(day.overview || "");
   linkifyElement($("lede"));
 
@@ -1303,7 +1320,7 @@ async function renderBriefing(date) {
 
   // forward-looking catalysts (newer day files; absent on old ones)
   const watch = $("watch-row");
-  watch.hidden = !(day.watch || []).length;
+  watch.hidden = true;
   watch.innerHTML = "";
   if (!watch.hidden) {
     const label = document.createElement("span");
@@ -1946,7 +1963,7 @@ async function renderMap() {
     mapboxgl.accessToken = token;
     state.map = new mapboxgl.Map({
       container: "map-canvas",
-      style: "mapbox://styles/mapbox/light-v11",
+      style: "mapbox://styles/mapbox/satellite-streets-v12",
       projection: "mercator", // flat map: predictable, and avoids the globe's
       center: [-95, 39.5], zoom: 3.2, minZoom: 2, maxZoom: 18, // initial-tile 'load' hang
       attributionControl: false, dragRotate: false, pitchWithRotate: false,
@@ -5073,44 +5090,117 @@ function readerStep(delta) {
   flashToast(`${next.section ? next.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`);
 }
 
-// swipe-driven step: an elegant cross-dissolve. The reader STAYS full-bleed and
-// opaque the whole time (never sliding off to expose the briefing underneath) —
-// the current story settles/fades out, the content swaps, then the next fades in
-// (the entrance lives in openReader so it runs AFTER the rebuild, never racing it).
-function readerSwipeStep(delta) {
-  const nav = state.readerNav;
-  const target = nav && nav.idx >= 0 && nav.list[nav.idx + delta];
-  if (!target) return;
-  const reader = $("reader");
-  document.getElementById("reader-ghost")?.remove();   // clear a straggler (rapid swipes)
-  const label = `${target.section ? target.section + " · " : ""}${nav.idx + 1 + delta} of ${nav.list.length}`;
-  // OPAQUE two-panel slide: freeze the CURRENT article as a full-opacity clone
-  // ("ghost") pinned exactly over the reader. openReader then renders the NEW
-  // article into #reader off-screen and slides it in while the ghost slides out —
-  // both panels cover the whole screen the entire time, so the briefing behind is
-  // NEVER revealed and there is no fade. (See the readerSlideDir branch in openReader.)
-  const cs = getComputedStyle(reader);
-  const ghost = reader.cloneNode(true);
-  ghost.id = "reader-ghost";
-  ghost.removeAttribute("hidden");
-  // the clone loses #reader's id-based CSS, so replicate its box inline
-  for (const p of ["position", "top", "left", "right", "bottom", "width", "height",
-                   "zIndex", "backgroundColor", "backgroundImage", "padding",
-                   "boxSizing", "overflowX", "overflowY", "borderRadius", "color", "font"]) {
-    ghost.style[p] = cs[p];
+// Full-page carousel: opaque adjacent pages track the finger and settle on release.
+// Adjacent pages are prepared between gestures, never copied at finger release.
+let readerCarousel = null;
+let readerPreviewCache = new Map();
+let readerPreviewEpoch = 0;
+function makeReaderPreview(story, date) {
+  const panel = $('reader').cloneNode(true);
+  panel.hidden = false;
+  panel.classList.add('reader-swipe-panel');
+  panel.removeAttribute('style');
+  panel.setAttribute('aria-hidden','true'); panel.inert = true;
+  const part = id => panel.querySelector('#' + id);
+  part('reader-title').textContent = story.title;
+  part('reader-kicker').textContent = [story.section,cadenceLabel(story)].filter(Boolean).join(' · ');
+  const mins = readMinutes(story);
+  part('reader-meta').textContent = [storyPublishers(story,false).join(' · '),formatDate(date,{weekday:'long',month:'long',day:'numeric'}),mins ? `${mins} min read` : null].filter(Boolean).join('  ·  ');
+  const hero = part('reader-hero'), img = part('reader-hero-img');
+  hero.hidden = !story.image || isJunkImageUrl(story.image);
+  if (!hero.hidden) { img.src = story.image; img.alt = story.title; } else img.removeAttribute('src');
+  const body = part('reader-body');
+  if (story.content) { body.innerHTML = sanitizeArticleHtml(story.content); dedupeLeadImage(body,story.image); }
+  else { body.textContent = story.summary || ''; }
+  // These are beyond the article or resolve asynchronously. Never show the previous story's context.
+  for (const id of ['reader-coverage','reader-next','reader-flash','reader-timeleft']) part(id).hidden = true;
+  const expl = part('reader-explainer'); expl.hidden = !story.explainer; expl.replaceChildren();
+  if (story.explainer) {
+    const label=document.createElement('div');label.className='explainer-label';label.textContent='In plain English';expl.append(label);
+    for (const text of story.explainer.split(/\n+/).filter(Boolean)) {const p=document.createElement('p');p.textContent=decodeEntities(text);expl.append(p);}
   }
-  ghost.style.margin = "0";
-  ghost.style.transition = "none";
-  ghost.style.transform = "translateX(0)";
-  ghost.style.opacity = "1";
-  ghost.style.pointerEvents = "none";
-  document.body.appendChild(ghost);
-  ghost.scrollTop = reader.scrollTop;   // match the frozen scroll position exactly
-  readerGhost = ghost;
-  readerSlideDir = delta;
-  readerStepFlash = true;
-  readerGo(nav.date, target.id);        // → openReader renders + runs the slide
-  flashToast(label);
+  const thread=part('reader-thread'), canopy=part('reader-canopy');thread.hidden=true;canopy.hidden=true;
+  const t=(state.threads || []).find(t=>t.slug===story.thread);
+  if(t) {thread.hidden=false;thread.textContent=`🧵 Part of a tale — ${t.title} · ${(t.entries||[]).length} stories →`;}
+  const can=state.campaigns && canopyForStory(state.campaigns,story,date);
+  if(can) {canopy.hidden=false;canopy.textContent=`🌳 Part of a saga — ${can.title} · ${(can.branches||[]).length} fronts →`;}
+  const targetIndex=state.readerNav.list.findIndex(s=>s.id===story.id);
+  [...part('reader-progress').children].forEach((el,i)=>{el.className='rp-seg'+(i<targetIndex?' done':i===targetIndex?' cur':'');});
+  part('reader-save').textContent=isSaved(date,story.id)?'★':'☆';
+  for(const id of ['reader-original','reader-original-end']) part(id).hidden=!safeHttpUrl(story.url);
+  // Inert previews must not duplicate live IDs or participate in overlay focus handling.
+  for(const el of [panel,...panel.querySelectorAll('[id]')]) {if(el.id){el.dataset.readerPart=el.id;el.removeAttribute('id');}}
+  return panel;
+}
+function prepareReaderPreviews() {
+  const epoch=++readerPreviewEpoch;
+  readerPreviewCache.clear();
+  const nav=state.readerNav;
+  if(!nav) return;
+  const warm=()=>{
+    if(epoch!==readerPreviewEpoch || $('reader').hidden || readerCarousel) return;
+    for(const delta of [-1,1]) {
+      const story=nav.list[nav.idx+delta];
+      if(story) readerPreviewCache.set(story.id,makeReaderPreview(story,nav.date));
+    }
+  };
+  if(window.requestIdleCallback) requestIdleCallback(warm,{timeout:200}); else setTimeout(warm,30);
+}
+function readerDragPages(dx) {
+  if(readerCarousel?.settling) return;
+  const dir=dx<0?1:-1, nav=state.readerNav, target=nav?.list[nav.idx+dir];
+  if(!target) { cancelReaderCarousel(true); return; }
+  if(readerCarousel?.dir!==dir) {
+    cancelReaderCarousel(true);
+    const panel=readerPreviewCache.get(target.id) || makeReaderPreview(target,nav.date);
+    readerPreviewCache.delete(target.id);
+    const width=window.innerWidth;
+    panel.style.transform=`translate3d(${dir*width}px,0,0)`;
+    document.body.append(panel);
+    panel.scrollTop=readerScrollPos[readMark(nav.date,target.id)] || 0;
+    readerCarousel={panel,dir,target,date:nav.date,width,dx:0,settling:false};
+  }
+  const c=readerCarousel;
+  c.dx=Math.max(-c.width,Math.min(c.width,dx));
+  $('reader').classList.add('reader-swiping');
+  $('reader').style.transition='none';
+  $('reader').style.transform=`translate3d(${c.dx}px,0,0)`;
+  c.panel.style.transition='none';
+  c.panel.style.transform=`translate3d(${c.dx+c.dir*c.width}px,0,0)`;
+}
+function cancelReaderCarousel(immediate=false) {
+  const c=readerCarousel;if(!c) return;
+  readerCarousel=null;clearTimeout(c.timer);
+  const r=$('reader');r.classList.remove('reader-swiping');
+  const duration=immediate||reducedMotion()?0:160;
+  r.style.transition=`transform ${duration}ms ease-out`;
+  r.style.transform='translate3d(0,0,0)';
+  c.panel.style.transition=`transform ${duration}ms ease-out`;
+  c.panel.style.transform=`translate3d(${c.dir*c.width}px,0,0)`;
+  if(!duration)c.panel.remove();else setTimeout(()=>c.panel.remove(),duration);
+}
+function readerSwipeStep(delta, velocity=0) {
+  const nav=state.readerNav,target=nav?.list[nav.idx+delta];
+  if(!target || readerCarousel?.settling) return;
+  if(!readerCarousel) readerDragPages(delta>0?-1:1);
+  const c=readerCarousel;if(!c)return;
+  c.settling=true;
+  const remaining=c.width-Math.abs(c.dx);
+  const duration=reducedMotion()?0:Math.max(80,Math.min(220,remaining/Math.max(1.5,Math.abs(velocity))));
+  const transition=`transform ${duration}ms cubic-bezier(.2,.75,.2,1)`;
+  $('reader').style.transition=transition;
+  $('reader').style.transform=`translate3d(${-delta*c.width}px,0,0)`;
+  c.panel.style.transition=transition;c.panel.style.transform='translate3d(0,0,0)';
+  c.timer=setTimeout(()=>{
+    if(readerCarousel!==c)return;
+    readerSlideDir=delta;readerStepFlash=true;readerGo(c.date,target.id);
+  },duration);
+}
+function finishReaderCarousel() {
+  const c=readerCarousel;readerCarousel=null;
+  const r=$('reader');r.classList.remove('reader-swiping');r.style.transition='none';r.style.transform='';r.style.opacity='';
+  if(c){clearTimeout(c.timer);c.panel.remove();}
+  prepareReaderPreviews();
 }
 
 // a left-edge swipe (or pull-down) returns to the briefing: the story slides off
@@ -5227,7 +5317,6 @@ const readerScrollPos = {};             // date/id -> scrollTop (session memory)
 let readerPrevSection = null;           // section of the story we came from
 let readerStepFlash = false;            // set by readerStep so a fresh open doesn't flash
 let readerSlideIn = false;              // set by a peek fling: slide the reader up over the sheet
-let readerGhost = null;                 // opaque clone of the outgoing story during a swipe-slide
 let readerSlideDir = 0;                 // +1 next / -1 prev: which way the two-panel slide runs
 let flashTimer = null;
 
@@ -5402,7 +5491,7 @@ async function openReaderRoute(date, id) {
   // section interstitial when a swipe crosses into a new section
   const flash = $("reader-flash");
   flash.hidden = true;
-  if (readerStepFlash && readerPrevSection && story.section && readerPrevSection !== story.section) {
+  if (!readerSlideDir && readerStepFlash && readerPrevSection && story.section && readerPrevSection !== story.section) {
     flash.textContent = story.section;
     flash.hidden = false;
     flash.classList.remove("show"); void flash.offsetWidth; flash.classList.add("show");
@@ -5421,7 +5510,7 @@ async function openReaderRoute(date, id) {
   // scroll-position memory: return to where you left this story, else the top
   reader.scrollTop = readerScrollPos[readMark(date, story.id)] || 0;
 
-  if (reducedMotion()) { readerSlideIn = false; readerSlideDir = 0; readerGhost?.remove(); readerGhost = null; }
+  if (reducedMotion()) { if(readerCarousel) finishReaderCarousel(); readerSlideIn = false; readerSlideDir = 0; }
   if (readerSlideIn) {
     // continuous "peek grows into the story": lift the reader above the sheet
     // (z 700) and slide it up from the bottom over the frozen peek, then drop
@@ -5442,29 +5531,13 @@ async function openReaderRoute(date, id) {
       reader.style.transition = ""; reader.style.transform = ""; reader.style.zIndex = "";
     }, 440);
   } else if (readerSlideDir) {
-    // arrived via a swipe-step: the OUTGOING article is frozen as an opaque ghost
-    // over the screen. Bring THIS (new) article in from the far side while the
-    // ghost slides out the opposite way — both full-opacity, always covering the
-    // full screen, so the briefing is never bared and nothing fades.
-    const dir = readerSlideDir; readerSlideDir = 0;
-    const ghost = readerGhost; readerGhost = null;
-    reader.style.opacity = "1";
-    reader.style.transition = "none";
-    reader.style.transform = `translateX(${dir > 0 ? 100 : -100}%)`;   // start off-screen
-    requestAnimationFrame(() => {
-      const ease = "transform .34s cubic-bezier(.33, 0, .12, 1)";
-      reader.style.transition = ease;
-      reader.style.transform = "translateX(0)";
-      if (ghost) { ghost.style.transition = ease; ghost.style.transform = `translateX(${dir > 0 ? -100 : 100}%)`; }
-    });
-    setTimeout(() => {
-      reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = "";
-      if (ghost && ghost.parentNode) ghost.parentNode.removeChild(ghost);
-    }, 360);
+    readerSlideDir=0;
+    finishReaderCarousel();
   } else {
     reader.style.transition = ""; reader.style.transform = ""; reader.style.opacity = ""; // clear pull-to-close residue
   }
 
+  if (!readerCarousel) prepareReaderPreviews();
   updateTimeLeft();
   // a short article that doesn't scroll is fully seen on open → mark it read
   requestAnimationFrame(() => {
@@ -6081,8 +6154,8 @@ async function openCanopyPeek(slug, originRect) {
 }
 
 function closeReaderNav() {
-  document.getElementById("reader-ghost")?.remove();   // never leave a slide clone behind
-  readerGhost = null; readerSlideDir = 0;
+  cancelReaderCarousel(true); readerPreviewEpoch++; readerPreviewCache.clear();
+  readerSlideDir = 0;
   if (history.length > 1) history.back();
   else location.hash = "/";
 }
@@ -6231,26 +6304,8 @@ function syncMastheadOffset() {
    freed space for free. Updated look only. */
 let mastAutohideWired = false;
 function wireMastAutohide() {
-  if (mastAutohideWired) return;
-  mastAutohideWired = true;
-  let lastY = window.scrollY, ticking = false;
-  const apply = () => {
-    ticking = false;
-    if (document.documentElement.dataset.look !== "updated") {
-      document.documentElement.classList.remove("mast-hidden");
-      return;
-    }
-    const y = window.scrollY;
-    if (y <= 52) document.documentElement.classList.remove("mast-hidden");        // always show near the top
-    else if (y > lastY + 6) document.documentElement.classList.add("mast-hidden"); // scrolling down → hide
-    else if (y < lastY - 6) document.documentElement.classList.remove("mast-hidden"); // scrolling up → show
-    lastY = y;
-  };
-  window.addEventListener("scroll", () => {
-    if (ticking) return;
-    ticking = true;
-    requestAnimationFrame(apply);
-  }, { passive: true });
+  // Keep both bars anchored; hiding one while moving the other breaks orientation.
+  document.documentElement.classList.remove("mast-hidden");
 }
 
 /* Pre-warm: the "jump"/clip on a view's FIRST open is really a first-render
@@ -6293,7 +6348,12 @@ function ensureBottomNav() {
     const link = document.createElement("a");
     link.href = a.getAttribute("href");
     if (a.dataset.tab) link.dataset.tab = a.dataset.tab;
-    link.textContent = a.textContent;
+    const shortLabel = {index:'Index',threads:'Stories'}[a.dataset.tab];
+    if(shortLabel) {
+      const full=document.createElement('span');full.className='nav-label-full';full.textContent=a.textContent;
+      const short=document.createElement('span');short.className='nav-label-short';short.textContent=shortLabel;
+      link.append(full,short);link.setAttribute('aria-label',a.textContent);
+    } else link.textContent=a.textContent;
     nav.appendChild(link);
   }
   // host the bar in a full-viewport fixed LAYER (one stable fixed element that
@@ -8862,7 +8922,7 @@ function setReaderSource(value) {
 window.briefingUpdateReady = () => {
   if (document.getElementById('app-update')) return;
   const notice = document.createElement('button'); notice.id = 'app-update'; notice.className = 'update-notice';
-  notice.textContent = 'App update ready · Reload when you’re ready';
+  notice.textContent = 'Update ready · Tap to reload';
   notice.onclick = () => location.reload(); document.body.appendChild(notice);
 };
 setupOverlayFocus(document, el => {
@@ -8871,7 +8931,6 @@ setupOverlayFocus(document, el => {
   if (el.classList.contains('reconnect-ov')) { el.remove(); return true; }
   return false;
 });
-document.getElementById('saved-shortcut')?.addEventListener('click', () => { state.searchQuery = ''; });
 
 let mapLibraryLoading;
 function loadMapLibrary() {
