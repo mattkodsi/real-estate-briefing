@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 // Optional local-only runtime; no database URL or production connection is accepted.
-const modulePath=process.env.PGLITE_MODULE;
-test('capture, push exhaustion and discovery operate atomically in isolated PostgreSQL',{skip:!modulePath},async()=>{
+const modulePath=process.env.PGLITE_MODULE || '@electric-sql/pglite';
+test('capture, push exhaustion and discovery operate atomically in isolated PostgreSQL',async()=>{
  const {PGlite}=await import(modulePath);const db=new PGlite();
  try {
  await db.exec(`create role anon;create role authenticated;create role service_role;

@@ -42,14 +42,9 @@ function shareCapabilities() {
   };
 }
 
-async function sb(query) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${query}`, {
-    cache: "no-store",
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-  });
-  if (!res.ok) throw new Error(`supabase ${res.status}`);
-  return res.json();
-}
+const dataClient = createDataClient({base: SUPABASE_URL, key: SUPABASE_KEY});
+const sb = query => dataClient.read(query);
+const sbAll = query => dataClient.all(query);
 
 /* One visual language for story types: same emoji + color in feed chips,
    map pins, and legends. */
@@ -199,7 +194,7 @@ const state = {
   mapFitPending: true, // fit the camera to the data only on the FIRST map draw; after
                        // that, mode switches / filters / re-entry keep your zoom & center
   filters: { type: null, asset: null, market: null },
-  groupBy: "section",
+  groupBy: "importance",
   mapTypeFilter: null, // null = all; otherwise a Set of dealTypes
   mapAsset: null,      // asset-class filter on the map
   mapValueBand: null,  // min deal size filter (number) or null
@@ -252,8 +247,8 @@ const $ = (id) => document.getElementById(id);
 
 async function fetchIndex() {
   const [days, weeks] = await Promise.all([
-    sb("days?select=date&order=date.asc"),
-    sb("weeks?select=week_of&order=week_of.asc"),
+    sbAll("days?select=date&order=date.asc"),
+    sbAll("weeks?select=week_of&order=week_of.asc"),
   ]);
   state.dates = days.map((r) => r.date);
   state.weeks = weeks.map((r) => r.week_of);
@@ -291,16 +286,7 @@ async function init() {
   // today it opens System status instead (refresh now lives on pull-to-refresh, so
   // the header is free to reach the status/offline page without scrolling to the
   // footer). From an older day it still snaps back to today first.
-  document.querySelector(".wordmark").addEventListener("click", (e) => {
-    e.preventDefault();
-    const latest = state.frontDate || state.dates[state.dates.length - 1] || null;
-    const h = location.hash;
-    const onBriefing = h === "" || h === "#/" || h.startsWith("#/day/");
-    if (onBriefing && state.currentDate === latest) { location.hash = "/status"; return; }
-    state.currentDate = latest;
-    if (h === "" || h === "#/") route(); // hash unchanged → no hashchange event
-    else location.hash = "/";
-  });
+
 
   $("search-btn").addEventListener("click", () => { location.hash = "/search"; });
   $("bell-btn").addEventListener("click", () => { location.hash = "/alerts"; });
@@ -373,7 +359,7 @@ async function init() {
     const link = e.target.closest?.("#bottom-nav a, .tabs a");
     if (link && link.classList.contains("active")) {
       e.preventDefault();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      window.scrollTo({ top: 0, behavior: reducedMotion() ? "instant" : "smooth" });
     }
   });
   $("sheet-backdrop").addEventListener("click", () => sheetDismiss());
@@ -806,7 +792,7 @@ async function init() {
   route();
   // once the first screen is painted, quietly warm the offline cache so the
   // train ride has the last few days' article text without any manual step
-  setTimeout(() => preloadForOffline(false), 1800);
+  setTimeout(() => preloadForOffline(false), 5000);
   // self-heal push subscriptions left on a rotated VAPID key (best-effort, async)
   reconcilePushSub();
   // warm the canopy registry so story cards can show their 🌳 chip; if we're on
@@ -827,8 +813,8 @@ const DEAD_WRAPPER_RE = /^https?:\/\/(links\.bisnow\.com|link\.mail\.beehiiv\.co
 const isDeadWrapperUrl = (u) => !!u && DEAD_WRAPPER_RE.test(u);
 function sanitizeDayUrls(day) {
   for (const s of day?.stories || []) {
-    if (isDeadWrapperUrl(s.url)) { s.url = null; s.sourceBlocked = false; }
-    for (const c of s.coverage || []) if (isDeadWrapperUrl(c.url)) c.url = null;
+    if (s.url && (!safeHttpUrl(s.url) || isDeadWrapperUrl(s.url))) { s.url = null; s.sourceBlocked = false; }
+    for (const c of s.coverage || []) if (c.url && (!safeHttpUrl(c.url) || isDeadWrapperUrl(c.url))) c.url = null;
   }
   return day;
 }
@@ -852,9 +838,9 @@ async function getDay(date) {
 async function getAllDays() {
   if (state.allDays) return state.allDays;
   try {
-    const rows = await sb("days_light?select=date,data&order=date.desc");
-    state.allDays = rows.map((r) => r.data).filter(Boolean);
-  } catch { state.allDays = []; }
+    const rows = await sbAll("days_light?select=date,data&order=date.desc");
+    state.allDays = rows.map((r) => sanitizeDayUrls(r.data)).filter(Boolean);
+  } catch { return []; }
   return state.allDays;
 }
 
@@ -878,20 +864,24 @@ async function preloadForOffline(manual) {
   if (!manual && now - lastPreload < 4 * 60 * 1000) return; // at most every ~4 min unless forced
   preloading = true;
   lastPreload = now;
-  const dates = state.dates.slice(-OFFLINE_DAYS).reverse(); // newest first — today matters most
+  const dates = state.dates.slice(manual ? -OFFLINE_DAYS : -1).reverse(); // newest first — today matters most
   const savedDates = [];
   try {
     for (const [i, date] of dates.entries()) {
       // Bandwidth: a background pass only refreshes what's likely to have changed —
       // today (i===0, still filling) plus any day not cached yet. A manual "Save
       // now" always re-pulls all six. Already-cached past days still count as ready.
-      if (!manual && i > 0 && state.days.has(date)) { savedDates.push(date); continue; }
+      if (!manual && i > 0 && state.days.has(date)) continue;
       try {
         // force a fresh network read so the SW re-caches the LATEST filled content
         // (state.days may hold an older copy from before the fill loop caught up)
         const rows = await sb(`days?date=eq.${date}&select=data`);
         const day = rows[0]?.data;
-        if (day) { state.days.set(date, sanitizeDayUrls(day)); savedDates.push(date); }
+        if (day) {
+          state.days.set(date, sanitizeDayUrls(day));
+          const url = `${SUPABASE_URL}/rest/v1/days?date=eq.${date}&select=data`;
+          if ('caches' in window && (await caches.match(url))?.ok) savedDates.push(date);
+        }
       } catch { /* transient / went offline mid-run — next focus retries */ }
     }
   } finally { preloading = false; }
@@ -929,13 +919,13 @@ function setOnlineState(on) {
 async function getThreads() {
   if (state.threads) return state.threads;
   try {
-    const rows = await sb("threads?select=slug,data");
+    const rows = await sbAll("threads?select=slug,data&order=slug.asc");
     // a tale needs 2+ real installments; skip anything RETRACTED (a bad link the
     // pipeline pulled) or thinner than that — threads are append-only in the DB,
     // so retraction is a flag, not a delete
     state.threads = rows.map((r) => ({ slug: r.slug, ...(r.data || {}) }))
       .filter((t) => !t.retracted && (t.entries || []).length >= 2);
-  } catch { state.threads = []; }
+  } catch { return []; }
   return state.threads;
 }
 
@@ -944,9 +934,9 @@ async function getThreads() {
 async function getCampaigns() {
   if (state.campaigns) return state.campaigns;
   try {
-    const rows = await sb("campaigns?select=slug,data");
+    const rows = await sbAll("campaigns?select=slug,data&order=slug.asc");
     state.campaigns = rows.map((r) => ({ slug: r.slug, ...(r.data || {}) }));
-  } catch { state.campaigns = []; }
+  } catch { return []; }
   return state.campaigns;
 }
 
@@ -972,18 +962,18 @@ function canopyForStory(campaigns, story, date) {
 async function getEvents() {
   if (state.events) return state.events;
   try {
-    const rows = await sb("events?select=id,data");
+    const rows = await sbAll("events?select=id,data&order=id.asc");
     state.events = rows.map((r) => ({ id: r.id, ...(r.data || {}) }));
-  } catch { state.events = []; }
+  } catch { return []; }
   return state.events;
 }
 
 async function getMetrics() {
   if (state.metrics) return state.metrics;
   try {
-    const rows = await sb("metrics?select=id,data");
+    const rows = await sbAll("metrics?select=id,data&order=id.asc");
     state.metrics = rows.map((r) => ({ id: r.id, ...(r.data || {}) }));
-  } catch { state.metrics = []; }
+  } catch { return []; }
   return state.metrics;
 }
 
@@ -1099,25 +1089,16 @@ async function hardRefresh() {
     if (!reg) return;
     reg.addEventListener("updatefound", () => {
       const w = reg.installing;
-      if (w) w.addEventListener("statechange", () => { if (w.state === "activated") location.reload(); });
+      if (w) w.addEventListener("statechange", () => { if (w.state === "activated") window.briefingUpdateReady?.(); });
     });
     await reg.update();
-    if (reg.waiting) location.reload();
+    if (reg.waiting) window.briefingUpdateReady?.();
   } catch { /* offline — data refresh already toasted */ }
 }
 
-/* iPhone: the app shell must never zoom. Double-tap is disabled via
-   touch-action, pinch via the viewport meta (honored in installed web apps)
-   plus Safari's gesture events here. The map keeps its own pinch (Leaflet
-   handles touches itself). */
-window.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
-window.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });
-window.addEventListener("wheel", (e) => { if (e.ctrlKey || e.metaKey) e.preventDefault(); }, { passive: false });
-
-function formatDate(iso, opts) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString("en-US", opts);
-}
+const formatDate = BriefingCore.formatPeriod;
+const safeHttpUrl = BriefingCore.safeHttpUrl;
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ---------- routing ---------- */
 
@@ -1125,7 +1106,7 @@ function formatDate(iso, opts) {
 // a gentle smooth scroll, never the abrupt jump-to-top a full re-render caused.
 // The small top gap comes from CSS scroll-margin-top on the panels.
 function smoothScrollIntoView(el) {
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.scrollIntoView({ behavior: reducedMotion() ? "instant" : "smooth", block: "start" });
 }
 
 let lastRouteHash = null;
@@ -1188,7 +1169,7 @@ function route() {
       if (focus === "connections") {
         const el = document.getElementById("sessions-card");
         if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.scrollIntoView({ behavior: reducedMotion() ? "instant" : "smooth", block: "center" });
           el.classList.add("status-flash");
           setTimeout(() => el.classList.remove("status-flash"), 1800);
         }
@@ -1206,7 +1187,7 @@ function route() {
   } else if (h === "#/threads") {
     showView("threads");
     renderThreads();
-  } else if (h === "#/calendar") {
+  } else if (h === "#/calendar" || h.startsWith("#/calendar?")) {
     showView("calendar");
     renderCalendar();
   } else if (h === "#/trends") {
@@ -1276,10 +1257,14 @@ async function renderBriefing(date) {
   $("prev-day").disabled = i <= 0;
   $("next-day").disabled = i >= state.dates.length - 1;
 
+  const requestedHash = location.hash;
   const day = await getDay(date);
+  if (state.currentDate !== date || location.hash !== requestedHash) return;
   if (!day) {
     empty.hidden = false;
-    empty.textContent = "Couldn't load this briefing.";
+    empty.textContent = "Couldn't load this briefing. ";
+    const retry = document.createElement('button'); retry.textContent = 'Try again'; retry.className = 'load-more';
+    retry.onclick = () => renderBriefing(date); empty.appendChild(retry);
     $("lede-block").hidden = true;
     $("feed").innerHTML = "";
     return;
@@ -1304,6 +1289,8 @@ async function renderBriefing(date) {
     li.textContent = decodeEntities(text);
     if (id && (day.stories || []).some((s) => s.id === id)) {
       li.classList.add("kp-clickable");
+      li.tabIndex = 0; li.setAttribute("role", "link");
+      li.addEventListener("keydown", e => { if (e.key === "Enter") li.click(); });
       // tap opens the story; hold peeks it (same story-peek as a feed card)
       li.dataset.peek = "story";
       li.dataset.peekDate = date;
@@ -1517,7 +1504,7 @@ function storyChips(story, date) {
   // timeline (stop the card's own click so it doesn't open the reader instead)
   if (story.thread) {
     const arc = chip("🧵 Tale", "chip-arc");
-    arc.setAttribute("role", "link");
+    arc.setAttribute("role", "link"); c.tabIndex = 0;
     arc.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
       location.hash = `/thread/${story.thread}`;
@@ -1530,7 +1517,7 @@ function storyChips(story, date) {
     const can = canopyForStory(state.campaigns, story, date);
     if (can) {
       const cc = chip("🌳 " + (can.title || "Saga"), "chip-canopy");
-      cc.setAttribute("role", "link");
+      cc.setAttribute("role", "link"); c.tabIndex = 0;
       cc.addEventListener("click", (e) => {
         e.preventDefault(); e.stopPropagation();
         location.hash = `/campaign/${can.slug}`;
@@ -1654,7 +1641,7 @@ function renderControls(day) {
 
   const groupSel = document.createElement("select");
   groupSel.className = "ctl-select";
-  for (const [val, label] of [["section", "Group: Topic"], ["dealType", "Group: Type"], ["assetClass", "Group: Asset"], ["market", "Group: Market"]]) {
+  for (const [val, label] of [["importance", "Order: Importance"], ["section", "Group: Topic"], ["dealType", "Group: Type"], ["assetClass", "Group: Asset"], ["market", "Group: Market"]]) {
     const o = document.createElement("option");
     o.value = val;
     o.textContent = label;
@@ -1839,11 +1826,11 @@ function renderFeed(day) {
   const key = state.groupBy;
   const groups = new Map();
   for (const s of rest) {
-    const k = s[key] || (key === "section" ? "More" : "Other");
+    const k = key === "importance" ? "More headlines" : s[key] || (key === "section" ? "More" : "Other");
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(s);
   }
-  const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const ordered = [...groups.entries()].sort((a, b) => byImportance(a[1][0], b[1][0]));
   for (const [name, list] of ordered) {
     // within every grouping, order by the day's holistic importance rank (the
     // story's position in day.stories — the pipeline writes them best-first), NOT
@@ -1890,7 +1877,7 @@ function renderFeed(day) {
     const mins = fullStories.reduce((sum, s) => sum + readMinutes(s), 0);
     const done = document.createElement("div");
     done.className = "feed-done";
-    done.textContent = `You're all caught up ✓ · ${all.length} ${all.length === 1 ? "story" : "stories"}${mins ? ` · ~${mins} min` : ""}`;
+    done.textContent = `End of briefing · ${all.length} ${all.length === 1 ? "story" : "stories"}${mins ? ` · ~${mins} min` : ""}`;
     feed.appendChild(done);
   }
 }
@@ -1943,7 +1930,9 @@ const RADIUS_EXPR = ["interpolate", ["linear"], ["sqrt", ["coalesce", ["get", "v
   0, 5, 1000, 6.5, 5000, 9, 15000, 13, 31623, 18, 70000, 22];
 
 async function renderMap() {
+  renderMap.run = renderMap.run || 0;
   const canvas = $("map-canvas");
+  if (typeof mapboxgl === "undefined") await loadMapLibrary().catch(() => {});
   if (typeof mapboxgl === "undefined") {
     canvas.innerHTML = "<p style='padding:20px;font-size:13px;color:var(--ink-2)'>Map library couldn't load (offline?). Try again once connected.</p>";
     return;
@@ -1957,7 +1946,7 @@ async function renderMap() {
     mapboxgl.accessToken = token;
     state.map = new mapboxgl.Map({
       container: "map-canvas",
-      style: "mapbox://styles/mapbox/satellite-streets-v12",
+      style: "mapbox://styles/mapbox/light-v11",
       projection: "mercator", // flat map: predictable, and avoids the globe's
       center: [-95, 39.5], zoom: 3.2, minZoom: 2, maxZoom: 18, // initial-tile 'load' hang
       attributionControl: false, dragRotate: false, pitchWithRotate: false,
@@ -1981,8 +1970,12 @@ async function renderMap() {
   const dates = mapDates();
   const items = [];
   const assets = new Set();
+  const mapRun = ++renderMap.run;
+  const lightDays = dates.length > 1 ? await getAllDays() : [];
+  if (mapRun !== renderMap.run) return;
   for (const date of dates) {
-    const day = await getDay(date);
+    const day = dates.length > 1 ? lightDays.find(d => d.date === date) : await getDay(date);
+    if (mapRun !== renderMap.run) return;
     for (const story of day?.stories || []) {
       if (story.assetClass) assets.add(story.assetClass);
       for (const loc of story.locations || []) {
@@ -2237,9 +2230,12 @@ function renderMapLegend(typeTally) {
 
 async function renderWeekly() {
   const wrap = $("weekly-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   const latest = state.weeks[state.weeks.length - 1];
   const wk = await getWeek(latest);
+  if (!isCurrentRender()) return;
 
   if (!wk) {
     const p = document.createElement("p");
@@ -2255,11 +2251,10 @@ async function renderWeekly() {
   wrap.appendChild(label);
 
   if (wk.overview) {
-    const p = document.createElement("p");
-    p.className = "week-overview";
-    p.textContent = wk.overview;
-    linkifyElement(p);
-    wrap.appendChild(p);
+    const summary = document.createElement('details'); summary.className = 'weekly-synthesis';
+    const label = document.createElement('summary'); label.textContent = 'The week in context';
+    const p = document.createElement('p'); p.className = 'week-overview'; p.textContent = wk.overview;
+    summary.append(label, p); wrap.appendChild(summary); linkifyElement(p);
   }
 
   if ((wk.themes || []).length) {
@@ -2318,14 +2313,21 @@ function addDays(iso, n) {
 
 async function renderHistory() {
   const wrap = $("history-list");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   if (!state.dates.length) {
     wrap.textContent = "No briefings yet.";
     return;
   }
+  const generation = Symbol(); renderHistory.run = generation;
+  const days = await getAllDays();
+  if (!isCurrentRender()) return;
+  if (renderHistory.run !== generation) return;
   await renderHistoryHeat(wrap);
+  if (renderHistory.run !== generation) return;
   for (const date of state.dates.slice().reverse()) {
-    const day = await getDay(date);
+    const day = days.find(d => d.date === date);
     const card = document.createElement("button");
     card.className = "day-card";
     card.addEventListener("click", () => { location.hash = `/day/${date}`; });
@@ -2383,6 +2385,8 @@ function setRead(date, id, on) {
 
 async function renderSearch() {
   const wrap = $("search-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
 
   const bar = document.createElement("div");
@@ -2390,7 +2394,8 @@ async function renderSearch() {
   const input = document.createElement("input");
   input.className = "search-input";
   input.type = "search";
-  input.placeholder = "Search every briefing, players, terms…";
+  input.placeholder = "Search headlines, summaries, people, terms…";
+  input.setAttribute("aria-label", "Search briefings and directory");
   input.value = state.searchQuery || "";
   bar.appendChild(input);
   wrap.appendChild(bar);
@@ -2400,10 +2405,11 @@ async function renderSearch() {
   wrap.appendChild(results);
 
   const [days, players, terms] = await Promise.all([getAllDays(), getPlayers(), getTerms()]);
-  const run = () => { state.searchQuery = input.value; renderSearchResults(results, days, players, terms); };
+  if (!isCurrentRender()) return;
+  const run = () => { state.searchLimit = 80; state.searchQuery = input.value; renderSearchResults(results, days, players, terms); };
   input.addEventListener("input", run);
   run();
-  input.focus();
+  if (location.hash === "#/search") input.focus();
 }
 
 function searchStoryRow(date, id, title, meta) {
@@ -2473,7 +2479,7 @@ function renderSearchResults(root, days, players, terms) {
     root.appendChild(sectionHead(`Stories · ${storyHits.length}`));
     const list = document.createElement("div");
     list.className = "story-group";
-    for (const { date, s } of storyHits.slice(0, 80)) {
+    for (const { date, s } of storyHits.slice(0, state.searchLimit || 80)) {
       const sub = [formatDate(date, { month: "short", day: "numeric" }), s.market, fmtValue(s.valueUsd)].filter(Boolean).join(" · ");
       list.appendChild(searchStoryRow(date, s.id, s.title, sub));
     }
@@ -2483,15 +2489,21 @@ function renderSearchResults(root, days, players, terms) {
     root.appendChild(sectionHead(`Players · ${playerHits.length}`));
     const grid = document.createElement("div");
     grid.className = "player-grid";
-    for (const p of playerHits.slice(0, 12)) grid.appendChild(playerCard(p));
+    for (const p of playerHits.slice(0, state.searchLimit || 80)) grid.appendChild(playerCard(p));
     root.appendChild(grid);
   }
   if (termHits.length) {
     root.appendChild(sectionHead(`Dictionary · ${termHits.length}`));
     const grid = document.createElement("div");
     grid.className = "player-grid";
-    for (const t of termHits.slice(0, 12)) grid.appendChild(termCard(t));
+    for (const t of termHits.slice(0, state.searchLimit || 80)) grid.appendChild(termCard(t));
     root.appendChild(grid);
+  }
+  if (Math.max(storyHits.length, playerHits.length, termHits.length) > (state.searchLimit || 80)) {
+    const more = document.createElement('button'); more.className = 'load-more';
+    more.textContent = 'Show more results';
+    more.onclick = () => { state.searchLimit = (state.searchLimit || 80) + 80; renderSearchResults(root, days, players, terms); };
+    root.appendChild(more);
   }
 }
 
@@ -2598,7 +2610,7 @@ function buildComps(body, priced) {
   body.innerHTML = "";
   const note = document.createElement("p");
   note.className = "trends-note";
-  note.textContent = "Grouped by market, because a comp only holds within one market and asset class. A median appears once a market has 3+ comparable sales; below that these are individual reference points, not a rate. Submarket-level (neighborhood) breakdown lands as the pipeline tags them, and a data feed would make it robust.";
+  note.textContent = "Closed sales with verified sale prices, grouped by market and asset class. Medians describe this coverage sample only, across the dates shown; location, condition and sale terms can differ. Financing, listings and project budgets are excluded.";
   body.appendChild(note);
 
   // asset-class scope (chips) — comps are only comparable within an asset class
@@ -2617,16 +2629,19 @@ function buildComps(body, priced) {
   body.appendChild(chips);
 
   const scope = priced.filter((s) => !state.compAsset || s.assetClass === state.compAsset);
-  const byMarket = new Map();
-  for (const s of scope) { const k = s.market || "—"; (byMarket.get(k) || byMarket.set(k, []).get(k)).push(s); }
-  const markets = [...byMarket.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
-  if (!markets.length) {
-    const p = document.createElement("p"); p.className = "trends-note"; p.textContent = "No priced deals in this asset class yet.";
-    body.appendChild(p); return;
-  }
+  const groups = BriefingCore.compGroups(scope);
+  if (!groups.length) body.appendChild(emptyPanel("No verified sale comparisons yet", "Older records remain below as references. Sale price and closed status must be confirmed before a record contributes to a median."));
   const list = document.createElement("div"); list.className = "comp-markets";
-  for (const [market, deals] of markets) list.appendChild(compMarketRow(market, deals));
+  for (const group of groups) list.appendChild(compMarketRow(group.label, group.deals, group.market));
   body.appendChild(list);
+  const unverified = scope.filter(s => s.dealType === 'Sale' && !BriefingCore.qualifyingSale(s));
+  if (unverified.length) {
+    const details = document.createElement('details'); details.className = 'research-references';
+    const label = document.createElement('summary'); label.textContent = `Sale references awaiting verification · ${unverified.length}`;
+    details.appendChild(label);
+    for (const story of unverified) details.appendChild(ledgerRow(story));
+    body.appendChild(details);
+  }
 }
 
 // A row linking a market's board section to its unified Market page (external
@@ -2643,7 +2658,7 @@ function marketBackdropLink(market) {
   return a;
 }
 
-function compMarketRow(market, deals) {
+function compMarketRow(market, deals, region = market) {
   const psfs = deals.map(compPsf).filter((v) => v);
   const punits = deals.map(compPunit).filter((v) => v);
   const total = deals.reduce((s, d) => s + (d.valueUsd || 0), 0);
@@ -2657,9 +2672,13 @@ function compMarketRow(market, deals) {
   const chev = document.createElement("span"); chev.className = "cm-chev"; chev.textContent = "▾";
   head.append(name, stat, chev);
   const inner = document.createElement("div"); inner.className = "comp-market-body"; inner.hidden = true;
-  inner.appendChild(marketBackdropLink(market));
+  inner.appendChild(marketBackdropLink(region));
   for (const s of [...deals].sort((a, b) => (b.valueUsd || 0) - (a.valueUsd || 0))) inner.appendChild(ledgerRow(s));
   head.addEventListener("click", () => { const o = inner.hidden; inner.hidden = !o; head.classList.toggle("open", o); });
+  const dates = deals.map(s => s._date).filter(Boolean).sort();
+  const period = document.createElement('p'); period.className = 'trends-note';
+  period.textContent = dates.length ? `Coverage: ${formatDate(dates[0])} – ${formatDate(dates[dates.length-1])}. Open the records to compare submarkets and terms.` : 'Coverage dates unavailable.';
+  inner.prepend(period);
   wrap.append(head, inner);
   return wrap;
 }
@@ -2670,7 +2689,7 @@ function compMarketRow(market, deals) {
    (derived). Grouped by market + asset like the comps, median only at n≥3. */
 function capRateOf(s) {
   if (typeof s.capRate === "number" && s.capRate > 0) return { v: s.capRate, derived: false };
-  if (s.noi && s.valueUsd) return { v: (s.noi / s.valueUsd) * 100, derived: true };
+  if (BriefingCore.qualifyingSale(s) && s.noi && s.valueUsd) return { v: (s.noi / s.valueUsd) * 100, derived: true };
   return null;
 }
 
@@ -2684,7 +2703,7 @@ function buildCapRates(body, stories) {
   const withCap = stories.map((s) => ({ s, cap: capRateOf(s) })).filter((x) => x.cap);
   if (!withCap.length) {
     body.appendChild(emptyPanel("No cap rates yet",
-      "As coverage publishes a deal's cap rate — or its NOI and price (we compute the rate) — they collect here by market. Cap rates are cited constantly in CRE deal coverage, so this fills fast."));
+      "As coverage publishes a deal's cap rate — or its NOI and price (we compute the rate) — they collect here by market. Only figures explicitly supported by source coverage are included."));
     return;
   }
   const assets = [...new Set(withCap.map((x) => x.s.assetClass).filter(Boolean))].sort();
@@ -2703,7 +2722,7 @@ function buildCapRates(body, stories) {
 
   const scope = withCap.filter((x) => !state.capAsset || x.s.assetClass === state.capAsset);
   const byMarket = new Map();
-  for (const x of scope) { const k = x.s.market || "—"; (byMarket.get(k) || byMarket.set(k, []).get(k)).push(x); }
+  for (const x of scope) { const k = `${x.s.market || "—"} · ${x.s.assetClass || "Unspecified asset"}`; (byMarket.get(k) || byMarket.set(k, []).get(k)).push(x); }
   const markets = [...byMarket.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
   const list = document.createElement("div");
   list.className = "comp-markets";
@@ -2722,7 +2741,7 @@ function capRateMarketRow(market, obs) {
   const chev = document.createElement("span"); chev.className = "cm-chev"; chev.textContent = "▾";
   head.append(name, stat, chev);
   const inner = document.createElement("div"); inner.className = "comp-market-body"; inner.hidden = true;
-  inner.appendChild(marketBackdropLink(market));
+  inner.appendChild(marketBackdropLink(obs[0]?.s.market || market));
   for (const o of [...obs].sort((a, b) => a.cap.v - b.cap.v)) inner.appendChild(capObsRow(o));
   head.addEventListener("click", () => { const o = inner.hidden; inner.hidden = !o; head.classList.toggle("open", o); });
   wrap.append(head, inner);
@@ -2994,6 +3013,8 @@ const DESK_GROUPS = [
 
 async function renderTrends() {
   const wrap = $("trends-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   wrap.appendChild(pageHead("The Desk",
     "The market's macro backdrop and every number the briefing accumulates — each board a tap away."));
@@ -3005,6 +3026,8 @@ async function renderTrends() {
   const [days, metrics, players, events, threads, campaigns] = await Promise.all([
     getAllDays(), getMetrics(), getPlayers(), getEvents(), getThreads(), getCampaigns(),
   ]);
+
+  if (!isCurrentRender()) return;
   const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })));
   const priced = stories.filter((s) => s.valueUsd);
   const distress = stories.filter((s) => s.dealType === "Distress");
@@ -3116,6 +3139,8 @@ function deskCard(item, stat) {
 
 async function renderDeskSection(id) {
   const wrap = $("trends-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   wrap.appendChild(backLink("The Desk", "#/trends"));
   // legacy: Market Metrics folded into Market Pulse — send old links there
@@ -3127,12 +3152,14 @@ async function renderDeskSection(id) {
     wrap.appendChild(pageHead("Market Pulse",
       "One read on the whole market — rates, housing, and the CRE figures the trade press cites. Tap any signal for its full history."));
     const [pulse, metrics] = await Promise.all([getPulse(), getMetrics()]);
+  if (!isCurrentRender()) return;
     buildMarketPulse(wrap, pulse, metrics);
     return;
   }
 
   wrap.appendChild(pageHead(item.title, item.blurb));
   const days = await getAllDays();
+  if (!isCurrentRender()) return;
   const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })));
   const priced = stories.filter((s) => s.valueUsd);
   const body = document.createElement("div");
@@ -3199,6 +3226,10 @@ function buildMarketPulse(wrap, pulse, metrics = []) {
     wrap.appendChild(emptyPanel("Market Pulse is warming up",
       "The national data feed refreshes a few times a day. Check back shortly."));
     return;
+  }
+  if (pulse.stale || Object.values(pulse.national || {}).some(s => s.stale) || pulse.refreshError) {
+    const stale = document.createElement('p'); stale.className = 'status-note';
+    stale.textContent = 'Some sources could not refresh. Retained observations keep their original dates; check the date on each series.'; wrap.appendChild(stale);
   }
   const n = pulse.national;
 
@@ -3509,15 +3540,15 @@ function computeVerdict(p) {
   const hpi = n.hpi;
   if (hpi?.yoy != null) {
     bits.push(hpi.yoy > 4 ? `home prices are still rising (${signed(hpi.yoy)}% YoY)`
-      : hpi.yoy > 0.5 ? `home-price growth has cooled to ${signed(hpi.yoy)}% YoY`
-      : hpi.yoy > -0.5 ? "home prices have gone flat" : `home prices are slipping (${signed(hpi.yoy)}% YoY)`);
+      : hpi.yoy > 0.5 ? `home prices are up ${signed(hpi.yoy)}% YoY`
+      : hpi.yoy > -0.5 ? "home prices are near their year-ago level" : `home prices are slipping (${signed(hpi.yoy)}% YoY)`);
     if (hpi.latest?.date) stamps.push(`prices ${monStamp(hpi.latest.date)}`);
   }
   const rent = p.zillowNational?.rent;
   if (rent?.yoy != null) {
-    bits.push(rent.yoy > 4 ? `rents are running hot (${signed(rent.yoy)}% YoY)`
-      : rent.yoy > 1.5 ? `rent growth is moderating (${signed(rent.yoy)}% YoY)`
-      : `rents are soft (${signed(rent.yoy)}% YoY)`);
+    bits.push(rent.yoy > 4 ? `rents are up (${signed(rent.yoy)}% YoY)`
+      : rent.yoy > 1.5 ? `rents are up (${signed(rent.yoy)}% YoY)`
+      : `rent change is (${signed(rent.yoy)}% YoY)`);
     if (rent.latest?.date) stamps.push(`rents ${monStamp(rent.latest.date)}`);
   }
   const cre = n.cre_delinq;
@@ -3608,12 +3639,15 @@ function buildPulseChart(history, opts) {
    the comps board — so the same market always resolves to one place. */
 async function renderMarketPage(name) {
   const wrap = $("market-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   wrap.appendChild(backLink("Market Pulse", "#/desk/pulse"));
   wrap.appendChild(pageHead(name,
     "Everything the briefing knows about this market — the external backdrop and every deal tracked here."));
 
   const pulse = await getPulse();
+  if (!isCurrentRender()) return;
   const md = pulse?.metros?.[name];
 
   // open external chart, if any
@@ -3644,6 +3678,7 @@ async function renderMarketPage(name) {
 
   // internal: this market's deals
   const days = await getAllDays();
+  if (!isCurrentRender()) return;
   const stories = days.flatMap((d) => (d.stories || []).map((s) => ({ ...s, _date: d.date })))
     .filter((s) => s.market === name);
   const priced = stories.filter((s) => s.valueUsd);
@@ -3736,12 +3771,12 @@ async function getPlayers() {
   if (state.players) return state.players;
   const m = new Map();
   try {
-    const rows = await sb("players?select=slug,data");
+    const rows = await sbAll("players?select=slug,data&order=slug.asc");
     for (const r of rows) {
       // slugs starting with "_" are pipeline bookkeeping (candidate ledger), not profiles
       if (!r.slug.startsWith("_") && r.data?.name) m.set(r.slug, { slug: r.slug, ...r.data });
     }
-  } catch { /* leave empty */ }
+  } catch { return m; }
   state.players = m;
   return m;
 }
@@ -3750,11 +3785,12 @@ async function getTerms() {
   if (state.terms) return state.terms;
   const m = new Map();
   try {
-    const rows = await sb("terms?select=slug,data");
+    const rows = await sbAll("terms?select=slug,data&order=slug.asc");
     for (const r of rows) {
+      if (r.data?.aliasOf) { (state.termAliases ||= {})[r.slug] = r.data.aliasOf; continue; }
       if (r.data?.term) m.set(r.slug, { slug: r.slug, ...r.data });
     }
-  } catch { /* leave empty */ }
+  } catch { return m; }
   state.terms = m;
   return m;
 }
@@ -3851,7 +3887,7 @@ function entityIndex(players, terms) {
 function linkifyElement(root, excludeSlug) {
   if (!root) return;
   Promise.all([getPlayers(), getTerms()]).then(([players, terms]) => {
-    if ((!players.size && !terms.size) || !root.isConnected) return;
+    if ((!players.size && !terms.size) || !root.isConnected || root.closest("button, a, [role=link]")) return;
     const { regex, map } = entityIndex(players, terms);
     if (!regex) return;
     const seen = new Set();
@@ -3859,7 +3895,7 @@ function linkifyElement(root, excludeSlug) {
       acceptNode(n) {
         if (!n.nodeValue || n.nodeValue.length < 3) return NodeFilter.FILTER_REJECT;
         for (let el = n.parentElement; el && el !== root; el = el.parentElement) {
-          if (el.tagName === "A" || el.classList.contains("entity-link") || el.classList.contains("term-link")) {
+          if (el.tagName === "A" || el.tagName === "BUTTON" || el.getAttribute("role") === "link" || el.classList.contains("entity-link") || el.classList.contains("term-link")) {
             return NodeFilter.FILTER_REJECT;
           }
         }
@@ -3878,7 +3914,8 @@ function linkifyElement(root, excludeSlug) {
         seen.add(hit.slug);
         if (!frag) frag = document.createDocumentFragment();
         frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-        const s = document.createElement("span");
+        const s = document.createElement("button");
+        s.type = "button";
         s.className = hit.kind === "term" ? "term-link" : "entity-link";
         s.dataset.slug = hit.slug;
         s.textContent = m[0];
@@ -3922,8 +3959,11 @@ async function indexSegBar(active) {
 
 async function renderPlayers() {
   const wrap = $("players-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   const players = await getPlayers();
+  if (!isCurrentRender()) return;
 
   if (!players.size) {
     const p = document.createElement("p");
@@ -3936,7 +3976,9 @@ async function renderPlayers() {
   const all = [...players.values()];
   const nPeople = all.filter((p) => p.type === "person").length;
 
-  wrap.appendChild(await indexSegBar(state.playerType));
+  const segmentBar = await indexSegBar(state.playerType);
+  if (!isCurrentRender()) return;
+  wrap.appendChild(segmentBar);
 
   const bar = document.createElement("div");
   bar.className = "players-bar";
@@ -4060,8 +4102,11 @@ function playerCard(p) {
 
 async function renderPlayerProfile(slug) {
   const wrap = $("players-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   const players = await getPlayers();
+  if (!isCurrentRender()) return;
   const p = players.get(slug);
   if (!p) { location.hash = "/players"; return; }
 
@@ -4176,12 +4221,17 @@ function termScore(t) {
 
 async function renderDictionary() {
   const wrap = $("dictionary-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
 
   // shared Index segment control — People / Companies / Terms, with counts
-  wrap.appendChild(await indexSegBar("terms"));
+  const segmentBar = await indexSegBar("terms");
+  if (!isCurrentRender()) return;
+  wrap.appendChild(segmentBar);
 
   const terms = await getTerms();
+  if (!isCurrentRender()) return;
 
   if (!terms.size) {
     const p = document.createElement("p");
@@ -4317,8 +4367,12 @@ function termCard(t) {
 
 async function renderTermProfile(slug) {
   const wrap = $("dictionary-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   const terms = await getTerms();
+  if (!isCurrentRender()) return;
+  if (state.termAliases?.[slug]) { location.replace('#/term/' + state.termAliases[slug]); return; }
   const t = terms.get(slug);
   if (!t) { location.hash = "/dictionary"; return; }
 
@@ -4517,7 +4571,7 @@ function renderRates(host) {
   if (!r?.treasury) {
     const p = document.createElement("p");
     p.style.cssText = "font-style:italic;color:var(--ink-2);padding:40px 0;text-align:center";
-    p.textContent = "Rates arrive with the next pipeline run.";
+    p.textContent = "Rates are temporarily unavailable. Try refreshing when connected.";
     wrap.appendChild(p);
     return;
   }
@@ -4544,14 +4598,14 @@ function renderRates(host) {
   const titleRow = document.createElement("div");
   titleRow.className = "chart-title-row";
   const title = sectionHead(
-    state.rateChart === "forward" ? `SOFR Forward — Next ${state.fwdHorizon}`
+    state.rateChart === "forward" ? `Approximate forward rates — Next ${state.fwdHorizon}`
     : state.rateChart === "history" ? `${histLabels[state.histKey] || ""} — Past ${state.histRange}`
     : "Treasury Yield Curve"
   );
   title.style.margin = "0";
   const badge = document.createElement("span");
   badge.className = "chart-badge " + (state.rateChart === "forward" ? "proj" : "actual");
-  badge.textContent = state.rateChart === "forward" ? "PROJECTED" : "ACTUAL";
+  badge.textContent = state.rateChart === "forward" ? "APPROXIMATION" : "OBSERVED";
   titleRow.append(title, badge);
   head.appendChild(titleRow);
 
@@ -4616,7 +4670,7 @@ function renderRates(host) {
   const note = document.createElement("p");
   note.className = "rates-note";
   note.textContent = state.rateChart === "forward"
-    ? "Every point is in the FUTURE — the market's implied SOFR path read from today's Treasury prices (±10–30bp vs the licensed OIS curve inside 1Y). A modeling guide, not a quote."
+    ? "Illustrative forward rates treat Treasury par yields as zero-coupon yields. This is an approximation, not an OIS curve, a SOFR forecast or a tradable quote."
     : state.rateChart === "history"
     ? "Every point is in the PAST — actual daily prints from treasury.gov and the New York Fed. Tap the highlighted pane again to return to the yield curve."
     : `Treasury par yield curve as of ${r.curveDate}; SOFR published by the New York Fed (${r.sofr?.date}). Changes are vs the prior business day.`;
@@ -4968,11 +5022,11 @@ function feedOrder(day) {
   const key = state.groupBy;
   const groups = new Map();
   for (const s of rest) {
-    const k = s[key] || (key === "section" ? "More" : "Other");
+    const k = key === "importance" ? "More headlines" : s[key] || (key === "section" ? "More" : "Other");
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(s);
   }
-  const ordered = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const ordered = [...groups.entries()].sort((a, b) => byImportance(a[1][0], b[1][0]));
   const out = [...featured];
   for (const [, list] of ordered) {
     list.sort(byImportance);   // within each group, importance rank — matches the feed
@@ -5266,7 +5320,7 @@ async function openReaderRoute(date, id) {
     const p = document.createElement("p");
     p.className = "reader-fallback";
     p.textContent = (story.summary || "") + (navigator.onLine
-      ? " Full text wasn't available for this story — use the link below to read it at the source."
+      ? (story.url ? " Full text is not available here yet. Read the original at the source." : " This item is available as a summary only.")
       : " Full text isn't saved for offline yet — it'll load once you're back online.");
     body.appendChild(p);
   }
@@ -5290,8 +5344,7 @@ async function openReaderRoute(date, id) {
     linkifyElement(expl);
   }
 
-  $("reader-original").href = story.url || "#";
-  $("reader-original-end").href = story.url || "#";
+  setReaderSource(story.url);
 
   // other outlets' takes on the same story — depth on demand, never repetition
   readerCoverageBlock(story, date, null);
@@ -5368,6 +5421,7 @@ async function openReaderRoute(date, id) {
   // scroll-position memory: return to where you left this story, else the top
   reader.scrollTop = readerScrollPos[readMark(date, story.id)] || 0;
 
+  if (reducedMotion()) { readerSlideIn = false; readerSlideDir = 0; readerGhost?.remove(); readerGhost = null; }
   if (readerSlideIn) {
     // continuous "peek grows into the story": lift the reader above the sheet
     // (z 700) and slide it up from the bottom over the frozen peek, then drop
@@ -5514,9 +5568,7 @@ function showReaderVersion(story, date, idx) {
   if (!c) dedupeLeadImage(body, story.image);  // hero shows only on the primary version
   linkifyElement(body);
 
-  const url = (c && c.url) || story.url || "#";
-  $("reader-original").href = url;
-  $("reader-original-end").href = url;
+  setReaderSource((c && c.url) || story.url);
 
   readerCoverageBlock(story, date, idx);
   $("reader").scrollTop = 0;
@@ -5548,6 +5600,9 @@ function openSheet(build, opts) {
   sheet.classList.toggle("peek", !!opts.peek);
   peekFling = opts.onFling || null;
   build(card);
+  const dismiss = document.createElement('button'); dismiss.className = 'sheet-close';
+  dismiss.setAttribute('aria-label', 'Close preview'); dismiss.textContent = '×'; dismiss.onclick = closeSheet;
+  card.prepend(dismiss);
   sheet.hidden = false;
   document.body.classList.add("sheet-open"); // suppresses page-wide text selection
   requestAnimationFrame(() => sheet.classList.add("open"));
@@ -5561,6 +5616,7 @@ function openSheet(build, opts) {
    scale origin miles off). Drives the entrance with inline styles so it beats
    the CSS, then hands control back to the drag once it has settled. */
 function growFromCard(card, rect) {
+  if (reducedMotion()) return;
   const fin = card.getBoundingClientRect();
   if (!fin.width || !fin.height) return;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -6071,7 +6127,7 @@ async function readerApi(action, slug, payload = {}) {
   return data;
 }
 const prefStore = createProfileStore(localStorage,
-  async (slug, changes) => (await readerApi("patch", slug, { changes })).data,
+  async (slug, changes, mutations) => (await readerApi("patch", slug, { changes, mutations })).data,
   (slug, data) => {
     try { localStorage.setItem(profileCacheKey(slug), JSON.stringify(data)); } catch { /* storage unavailable */ }
     if (profile.slug === slug && !profile.guest) profile.data = data;
@@ -6101,6 +6157,7 @@ async function activateProfile(slug, meta) {
     if (!data) throw err;
   }
   delete data.pinHash; // remove any obsolete local verifier left by the old app
+  prefStore.observe(slug, data);
   data = prefStore.overlay(slug, data);
   Object.assign(profile, { slug, name: data.name || meta?.name || slug, color: data.color || PROFILE_COLORS[0], guest: false, data, dirty: new Set() });
   try {
@@ -6205,7 +6262,7 @@ let prewarmed = false;
 function prewarmData() {
   if (prewarmed) return;
   prewarmed = true;
-  const jobs = [getAllDays, getPlayers, getTerms, getThreads, getCampaigns, getEvents, getMetrics, getPulse];
+  const jobs = []; // Load research views on demand; idle CPU does not imply spare bandwidth.
   const idle = window.requestIdleCallback || ((f) => setTimeout(f, 120));
   const runNext = () => {
     const job = jobs.shift();
@@ -6389,7 +6446,7 @@ let prefsFlushTimer = null;
 function schedulePrefsFlush(soon) {
   if (profile.guest) return;
   clearTimeout(prefsFlushTimer);
-  prefsFlushTimer = setTimeout(() => flushPrefs().catch(() => { /* durable queue retries on focus/reconnect */ }), soon ? 50 : 800);
+  prefsFlushTimer = setTimeout(() => flushPrefs().catch(() => { flashToast("Changes saved on this device · sync will retry when connected"); }), soon ? 50 : 800);
 }
 
 async function flushPrefs() {
@@ -7275,8 +7332,8 @@ async function getConnections() {
 // etc.), posts them to store-session.
 function reconnectBookmarklet() {
   return "javascript:(async()=>{try{var c=document.cookie;if(!c||c.length<20){alert('Sign in first, then tap this again.');return;}"
-    + "var r=await fetch('" + SUPABASE_URL + "/functions/v1/store-session',{method:'POST',headers:{apikey:'" + SUPABASE_KEY + "','Content-Type':'application/json'},"
-    + "body:JSON.stringify({domain:location.hostname,cookie:c,via:'bookmarklet'})});var j=await r.json();"
+    + "var ticket=prompt('Paste the one-use owner capture ticket (valid for 10 minutes):');if(!ticket)return;var r=await fetch('" + SUPABASE_URL + "/functions/v1/store-session',{method:'POST',headers:{apikey:'" + SUPABASE_KEY + "','Content-Type':'application/json'},"
+    + "body:JSON.stringify({domain:location.hostname,cookie:c,captureToken:ticket.trim(),via:'bookmarklet'})});var j=await r.json();"
     + "alert(j.ok?('\\u2705 Reconnected '+j.domain):('\\u26a0\\ufe0f '+(j.error||'failed')));}catch(e){alert('\\u26a0\\ufe0f '+e);}})()";
 }
 
@@ -7290,14 +7347,15 @@ function openReconnectSheet(site) {
   card.innerHTML =
     '<button class="reconnect-close" aria-label="Close">✕</button>'
     + '<h3>Reconnect ' + site.label + '</h3>'
-    + '<p class="reconnect-lead">Once you’ve saved the key button below, reconnecting is two taps whenever a session lapses.</p>'
+    + '<p class="reconnect-lead">Reconnect uses a short-lived owner ticket so other readers cannot replace your publisher session.</p>'
     + '<ol class="reconnect-steps">'
-    + '<li><b>Sign in</b> to ' + site.label + '.<br><a class="reconnect-open" href="' + site.login + '" target="_blank" rel="noopener">Open ' + site.label + ' ↗</a></li>'
+    + '<li><b>Get a one-use owner ticket.</b> Ask the app operator to run <code>python3 scripts/trd_session.py --issue-ticket --domain ' + site.domain + '</code>. The ticket expires after 10 minutes. The private pipeline credential stays with the operator.</li>'
+    + '<li><b>Sign in</b> to '  + site.label + '.<br><a class="reconnect-open" href="' + site.login + '" target="_blank" rel="noopener">Open ' + site.label + ' ↗</a></li>'
     + '<li><b>Save this button</b> to your bookmarks/favorites (one time). On desktop drag it to the bookmarks bar; on a phone, use “Copy” below and paste it into a new bookmark’s URL.<br><a class="reconnect-bm" href="' + bmAttr + '">🔑 Reconnect</a></li>'
-    + '<li>Back on ' + site.label + ' while signed in, <b>tap that saved bookmark</b>. You’ll see “Reconnected ✅”.</li>'
+    + '<li>Back on ' + site.label + ' while signed in, <b>tap that saved bookmark</b>. Paste your one-use ticket when prompted. You’ll see “Reconnected ✅”.</li>'
     + '</ol>'
     + '<button class="reconnect-copy">Copy the reconnect button</button>'
-    + '<p class="reconnect-note">One button covers every site — it reconnects whichever site you run it on (it reads the page’s address), so you only save it once. No password is entered or stored, only your browser’s existing session cookie.</p>';
+    + '<p class="reconnect-note">Save the bookmark once; use a fresh ticket for the selected publisher each time. No publisher password is entered or stored. The ticket authorizes one session capture only.</p>';
   ov.appendChild(card);
   document.body.appendChild(ov);
   const close = () => ov.remove();
@@ -7451,10 +7509,13 @@ function todayISO() {
 /* --- Story arcs (threads + canopies) --- */
 async function renderThreads() {
   const wrap = $("threads-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
-  wrap.appendChild(pageHead("Sagas",
+  wrap.appendChild(pageHead("Storylines",
     "Running storylines the briefing is tracking. A tale is one exact storyline — the same property, deal, case, or company event; a saga groups several tales under one driver. Tap any to open its timeline right here."));
   const [threads, campaigns] = await Promise.all([getThreads(), getCampaigns()]);
+  if (!isCurrentRender()) return;
   if (!threads.length && !campaigns.length) {
     wrap.appendChild(emptyPanel("Nothing tracked yet",
       "When two or more stories share a concrete anchor — the same building, deal, case, or company event — they connect into a tale here, and related tales group into a saga."));
@@ -7609,11 +7670,14 @@ function threadCard(t, sagaTitle) {
 
 async function renderThread(slug) {
   const wrap = $("threads-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("Sagas", "#/threads"));
+  wrap.appendChild(backLink("Storylines", "#/threads"));
   const threads = await getThreads();
+  if (!isCurrentRender()) return;
   const t = threads.find((x) => x.slug === slug);
-  if (!t) { wrap.appendChild(emptyPanel("Tale not found", "This storyline isn't on record.")); return; }
+  if (!t) { wrap.appendChild(emptyPanel("Storyline not found", "This storyline isn't on record.")); return; }
 
   const head = document.createElement("div");
   head.className = "thread-head";
@@ -7638,7 +7702,7 @@ async function renderThread(slug) {
    expansion on the Arcs index. Entries are stored newest-first; a timeline
    reads oldest → newest. */
 function threadTimelineEl(t) {
-  const entries = [...(t.entries || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const entries = [...(t.entries || [])].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const tl = document.createElement("div");
   tl.className = "timeline";
   for (const e of entries) {
@@ -7702,9 +7766,12 @@ function branchEntries(b, threadMap) {
 
 async function renderCampaign(slug) {
   const wrap = $("threads-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("Sagas", "#/threads"));
+  wrap.appendChild(backLink("Storylines", "#/threads"));
   const [campaigns, threads] = await Promise.all([getCampaigns(), getThreads()]);
+  if (!isCurrentRender()) return;
   const c = campaigns.find((x) => x.slug === slug);
   if (!c) { wrap.appendChild(emptyPanel("Saga not found", "This storyline isn't on record.")); return; }
   const threadMap = new Map(threads.map((t) => [t.slug, t]));
@@ -7854,10 +7921,13 @@ const EVENT_ICON = { auction: "🔨", court: "⚖️", policy: "🏛️", fed: "
 
 async function renderCalendar() {
   const wrap = $("calendar-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
   wrap.appendChild(pageHead("Calendar",
     "Dated catalysts pulled from the briefing — auctions, court dates, policy deadlines, Fed decisions. Tap one to read the story it came from; star it to be reminded the morning it lands."));
   const events = await getEvents();
+  if (!isCurrentRender()) return;
   if (!events.length) {
     wrap.appendChild(emptyPanel("Nothing scheduled yet",
       "As stories name concrete dated events, they gather here — as an agenda and a month calendar — each tapping through to its source story."));
@@ -7866,6 +7936,7 @@ async function renderCalendar() {
 
   // resolve each event's source story so rows can tap through to the reader
   const days = await getAllDays();
+  if (!isCurrentRender()) return;
   const storyIndex = new Map();
   for (const d of days) for (const s of (d.stories || [])) storyIndex.set(d.date + "|" + s.id, { ...s, _date: d.date });
 
@@ -7893,6 +7964,11 @@ async function renderCalendar() {
   }
   wrap.appendChild(toolbar);
 
+  const requestedEvent = new URLSearchParams(location.hash.split('?')[1] || '').get('event');
+  if (requestedEvent) {
+    const event = events.find(e => e.id === requestedEvent);
+    if (event) { const focused = eventRow(event, event.date < todayISO(), storyIndex); focused.classList.add('event-focused'); wrap.appendChild(focused); }
+  }
   if (state.calView === "month") renderCalendarMonth(wrap, events, storyIndex);
   else renderCalendarAgenda(wrap, events, storyIndex);
 }
@@ -8048,6 +8124,7 @@ function eventRow(e, isPast, storyIndex) {
 
   const row = document.createElement("div");
   row.className = "cal-row" + (isPast ? " past" : "");
+  row.dataset.eventId = e.id;
 
   // the whole card (minus the star) taps through to the source story
   const open = document.createElement(src ? "button" : "div");
@@ -8191,6 +8268,8 @@ function sparkline(values) {
 
 async function renderStatus() {
   const wrap = $("status-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
 
   const head = document.createElement("div");
@@ -8248,6 +8327,7 @@ async function renderStatus() {
 
   const latest = state.dates[state.dates.length - 1];
   const [day, hb] = await Promise.all([getDay(latest), readHeartbeatRow()]);
+  if (!isCurrentRender()) return;
   // session health comes from the PUBLIC app_status table (metadata only — the
   // cookies themselves live in the locked-down secrets vault the app never reads)
   let connMeta = [];
@@ -8268,13 +8348,21 @@ async function renderStatus() {
   }
   wrap.appendChild(briefingCard);
 
+  const workers = await sb('publication_workers?select=id,data').catch(() => []);
+  if (!isCurrentRender()) return;
+  if (workers.length) {
+    const workerCard = statusCard('Processing activity');
+    for (const worker of workers) statusRow(workerCard, worker.data?.via || worker.id, `${fmtAge(ageMin(worker.data?.lastRun))} · ${worker.data?.state || 'reported'}`);
+    statusBlock(workerCard, 'Timing', 'Article enrichment timestamps are recorded from this release. Email arrival times are not yet available for a complete delivery-time measurement.');
+    wrap.appendChild(workerCard);
+  }
   const contentCard = statusCard("Article content");
   if (day) {
     const withUrl = (day.stories || []).filter((s) => s.url);
     const missing = missingContent(day);
     const blocked = (day.stories || []).filter((s) => s.sourceBlocked);
     statusRow(contentCard, "Full text in-app",
-      `${withUrl.length - missing.length - blocked.length} of ${withUrl.length}`,
+      `${withUrl.filter(s => contentWords(s) >= 120).length} of ${withUrl.length}`,
       missing.length ? "warn" : "ok");
     for (const s of missing) statusRow(contentCard, s.id, "waiting on the fill loop", "warn");
     for (const s of blocked) statusRow(contentCard, s.id, "reads at source (unfetchable)");
@@ -8294,7 +8382,7 @@ async function renderStatus() {
   }
   const offNote = document.createElement("p");
   offNote.className = "status-note";
-  offNote.textContent = "The last few days' article text is saved automatically so it reads on the train. Save now before you lose signal — stories still waiting on the fill loop (above) can't be saved until their text lands.";
+  offNote.textContent = "The current edition is saved automatically. Use Save latest to download up to six recent editions for the train. Save now before you lose signal — stories still waiting on the fill loop (above) can't be saved until their text lands.";
   offCard.appendChild(offNote);
   const saveBtn = document.createElement("button");
   saveBtn.className = "status-action";
@@ -8317,7 +8405,7 @@ async function renderStatus() {
   }
   const hbNote = document.createElement("p");
   hbNote.className = "status-note";
-  hbNote.textContent = "GitHub Actions fills every 30 min; a stale pulse wakes the cloud routine, the Supabase standby, then the Mac watchdog.";
+  hbNote.textContent = "Article workers are scheduled regularly, but scheduling can be delayed. Worker activity is separate from successful article publication.";
   hbCard.appendChild(hbNote);
   wrap.appendChild(hbCard);
 
@@ -8616,6 +8704,8 @@ function alertToggleRow(card, label, sub, value, onChange) {
 
 async function renderAlerts() {
   const wrap = $("alerts-content");
+  const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
+  const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
 
   const head = document.createElement("div");
@@ -8626,6 +8716,7 @@ async function renderAlerts() {
   // this device
   const devCard = statusCard("This device");
   const sub = await currentPushSub();
+  if (!isCurrentRender()) return;
   statusRow(devCard, "Notifications", sub ? "on" : "off", sub ? "ok" : "quiet");
   const devBtn = document.createElement("button");
   devBtn.className = "profile-go alert-enable";
@@ -8670,6 +8761,7 @@ async function renderAlerts() {
   const watched = watchedPlayers();
   if (watched.length) {
     const players = await getPlayers();
+  if (!isCurrentRender()) return;
     const list = document.createElement("div");
     list.className = "follow-list";
     for (const slug of watched) {
@@ -8698,6 +8790,7 @@ async function renderAlerts() {
   // recent alerts (this device)
   const inCard = statusCard("Recent alerts");
   const inbox = await readAlertsInbox();
+  if (!isCurrentRender()) return;
   if (inbox.length) {
     for (const entry of inbox.slice(0, 15)) {
       const row = document.createElement("button");
@@ -8757,3 +8850,44 @@ function bootApp() {
 }
 
 bootApp();
+
+
+function setReaderSource(value) {
+  const url = safeHttpUrl(value);
+  for (const id of ['reader-original', 'reader-original-end']) {
+    const link = $(id); link.hidden = !url;
+    if (url) link.href = url; else link.removeAttribute('href');
+  }
+}
+window.briefingUpdateReady = () => {
+  if (document.getElementById('app-update')) return;
+  const notice = document.createElement('button'); notice.id = 'app-update'; notice.className = 'update-notice';
+  notice.textContent = 'App update ready · Reload when you’re ready';
+  notice.onclick = () => location.reload(); document.body.appendChild(notice);
+};
+setupOverlayFocus(document, el => {
+  if (el.id === 'sheet') { closeSheet(); return true; }
+  if (el.id === 'reader') { $('reader-back').click(); return true; }
+  if (el.classList.contains('reconnect-ov')) { el.remove(); return true; }
+  return false;
+});
+document.getElementById('saved-shortcut')?.addEventListener('click', () => { state.searchQuery = ''; });
+
+let mapLibraryLoading;
+function loadMapLibrary() {
+  if (typeof mapboxgl !== 'undefined') return Promise.resolve();
+  if (mapLibraryLoading) return mapLibraryLoading;
+  mapLibraryLoading = new Promise((resolve, reject) => {
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css';
+    const script = document.createElement('script'); script.src = 'https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js';
+    const timer = setTimeout(() => { script.remove(); reject(new Error('Map load timed out')); }, 20000);
+    script.onload = () => { clearTimeout(timer); resolve(); };
+    script.onerror = () => { clearTimeout(timer); script.remove(); css.remove(); reject(new Error('Map unavailable')); };
+    document.head.append(css, script);
+  }).catch(error => { mapLibraryLoading = null; throw error; });
+  return mapLibraryLoading;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.matches('[role="link"]:not(a)')) { e.preventDefault(); e.target.click(); }
+});

@@ -34,4 +34,11 @@ jobs:
 
       # stdlib-only script (urllib) — no dependencies to install
       - name: Source & re-host missing avatars
-        run: python scripts/backfill_player_images.py ${{ github.event.inputs.args }}
+        env:
+          PLAYER_ARGS: ${{ github.event.inputs.args }}
+        run: |
+          python - <<'PYTHON'
+          import os, shlex, subprocess, sys
+          args = shlex.split(os.environ.get("PLAYER_ARGS", ""))
+          subprocess.run([sys.executable, "scripts/backfill_player_images.py", *args], check=True)
+          PYTHON

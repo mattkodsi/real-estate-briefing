@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const runtime=process.env.PGLITE_MODULE || '/private/tmp/cre-test-runtime/node_modules/@electric-sql/pglite/dist/index.js';
+const runtime=process.env.PGLITE_MODULE || '@electric-sql/pglite';
 const {PGlite}=await import(runtime);
 const token='a'.repeat(64);
 const id=n=>`12345678-1234-4234-8234-${String(n).padStart(12,'0')}`;

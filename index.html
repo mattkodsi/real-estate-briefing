@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#f2f4f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0d1015" media="(prefers-color-scheme: dark)">
   <title>Real Estate Briefing</title>
@@ -12,10 +12,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Briefing">
-  <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css">
   <!-- bump ?v= on every deploy so cached pages can never pair old code with new data -->
   <link rel="stylesheet" href="css/style.css?v=146">
-  <script src="https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js" defer></script>
 </head>
 <body>
 
@@ -62,8 +60,8 @@
         <a href="#/" data-tab="briefing">Briefing</a>
         <a href="#/map" data-tab="map">Map</a>
         <a href="#/weekly" data-tab="weekly">Weekly</a>
-        <a href="#/index" data-tab="index">Almanac</a>
-        <a href="#/threads" data-tab="threads">Sagas</a>
+        <a href="#/index" data-tab="index">Directory</a>
+        <a href="#/threads" data-tab="threads">Storylines</a>
         <a href="#/trends" data-tab="trends">Desk</a>
       </nav>
       <a id="rate-strip" class="rate-strip" href="#/rates" hidden></a>
@@ -74,7 +72,9 @@
     <!-- Briefing -->
     <section id="view-briefing" class="view" hidden>
       <p id="empty-state" hidden></p>
-      <div id="lede-block" hidden>
+      <nav class="edition-links" aria-label="Your briefing"><a href="#/search" id="saved-shortcut">Saved stories</a><a href="#/status">Settings &amp; status</a></nav>
+      <details id="lede-block" hidden>
+        <summary class="edition-summary">Today’s big picture <span>Overview, key points &amp; upcoming dates</span></summary>
         <div class="lede-col" id="overview-col">
           <div class="lede-kicker">The Big Picture</div>
           <p id="lede"></p>
@@ -84,7 +84,7 @@
           <ul id="key-points"></ul>
         </div>
         <div id="watch-row" hidden></div>
-      </div>
+      </details>
       <div id="controls" class="controls" hidden></div>
       <div id="feed"></div>
       <p id="day-notes" hidden></p>
@@ -109,7 +109,7 @@
       <div id="map-legend" class="map-legend"></div>
       <div id="map-canvas"></div>
       <div id="map-playback" class="map-playback" hidden></div>
-      <p class="map-hint">Bubbles scale with deal size — tap one to preview, tap its headline to read. Tap a glowing market to open its backdrop. Tap a legend chip to isolate a type; in All time, press play to watch capital accumulate.</p>
+      <p class="map-hint">Pins show places mentioned in coverage; some are approximate. Tap a pin to preview its story. Bubble size reflects a reported amount, which can be a sale, loan or project budget—not total investment.</p>
     </section>
 
     <!-- Trends -->
@@ -212,7 +212,7 @@
   </div>
 
   <!-- bottom-sheet mini-dossier (players + dictionary terms) -->
-  <div id="sheet" class="sheet" hidden>
+  <div id="sheet" role="dialog" aria-modal="true" aria-label="Preview" tabindex="-1" class="sheet" hidden>
     <div class="sheet-backdrop" id="sheet-backdrop"></div>
     <div class="sheet-card" id="sheet-card"></div>
   </div>
@@ -238,7 +238,10 @@
 
   <div id="toast" role="status"></div>
 
+  <script src="js/briefing-core.js?v=146"></script>
+  <script src="js/data-client.js?v=146"></script>
   <script src="js/profile-store.js?v=146"></script>
+  <script src="js/overlay-focus.js?v=146"></script>
   <script src="js/app.js?v=146"></script>
   <script>
     if ('serviceWorker' in navigator) {
@@ -252,7 +255,7 @@
         navigator.serviceWorker.addEventListener('controllerchange', function () {
           if (swReloading) return;
           swReloading = true;
-          window.location.reload();
+          window.briefingUpdateReady?.();
         });
       }
       window.addEventListener('load', function () {

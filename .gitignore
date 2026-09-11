@@ -10,3 +10,7 @@ data/
 scripts/pydoll-cf-waf-bypasser-skills/
 scripts/your-project/
 __pycache__/
+
+node_modules/
+.playwright-mcp/
+supabase/.temp/
