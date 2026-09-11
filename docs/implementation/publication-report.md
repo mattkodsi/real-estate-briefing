@@ -33,3 +33,13 @@ GitHub image pull/install success and actual browser challenge behavior need a r
 ## Independent review follow-up
 
 See publication-review.md. The follow-up fixes fractional heartbeat parsing, active-primary handling, local no-push timestamp compatibility, starvation across bounded passes, and Edge primary-heartbeat migration. Per-story fillAttemptedAt joins the narrow merge allowlist; only attempted articles receive it. Current verification is 19 passing publication Python tests plus 3 passing heartbeat-policy Node tests. Deploy the updated Edge fill-content function after migration001, preserving its legacy heartbeat writes during rollout.
+
+## Precise publication timing follow-up
+
+The publisher now records each story's `summaryPublishedAt` only when that story is newly published or its title/summary changes. Unchanged stories preserve the remote timestamp; unchanged legacy stories without timing evidence remain unstamped. Generator-provided timing fields do not fabricate/backdate that history. Repeating identical editorial input without the generated timing fields remains a no-op.
+
+`contentReadyAt` is a separate observed transition: it is stamped only when content moves from fewer than 120 text words to at least 120 (including an initially published complete article). Image, status, URL and attempt-only enrichment do not mark content ready. `enrichedAt`/`enrichedBy` remain broader activity evidence and must not be interpreted as content readiness. Already-readable legacy content is not retrospectively assigned a readiness date.
+
+The Supabase standby filler now stamps `enrichedAt`, `enrichedBy: supabase-edge`, `contentReadyAt`, and document `publishedAt` on successful article publication. Its existing `audit_publish_fill` SQL stores the complete JSON document using atomic expected-data comparison, so no additional migration is needed to retain these fields. A mocked handler plus the actual checked-in SQL body was executed in PGlite and verified timestamp retention and stale-write rejection.
+
+Verification after this follow-up: 22 Python publication/worker tests pass; the new standby handler/database timing test passes. Three new Python tests first failed on missing timing and accepted backdating, then passed after the implementation. No production data was rewritten to manufacture missing historical observations.

@@ -152,4 +152,58 @@ class IntegrationTests(unittest.TestCase):
         edited['stories'][0]['content'] = 'fetched'; current['stories'].pop(0)
         self.assertEqual(p.merge_enrichment(base, edited, current, 'test', 'now'), current)
 
+class TimingTests(unittest.TestCase):
+    def test_content_ready_only_when_readable_content_crosses_threshold(self):
+        base = day(); edited = copy.deepcopy(base)
+        edited['stories'][0]['image'] = 'https://example.com/image'
+        merged = p.merge_enrichment(base, edited, base, 'test', 'now')
+        self.assertNotIn('contentReadyAt', merged['stories'][0])
+        edited['stories'][0]['content'] = '<p>' + 'word ' * 120 + '</p>'
+        merged = p.merge_enrichment(base, edited, base, 'test', 'now')
+        self.assertEqual(merged['stories'][0]['contentReadyAt'], 'now')
+        self.assertNotIn('summaryPublishedAt', merged['stories'][0])
+        legacy = copy.deepcopy(edited); changed = copy.deepcopy(legacy)
+        changed['stories'][0]['imageChecked'] = True
+        self.assertNotIn('contentReadyAt', p.merge_enrichment(legacy, changed, legacy, 'test', 'later')['stories'][0])
+
+    def test_editorial_timestamps_and_same_input_idempotency(self):
+        from unittest.mock import patch
+        class Fake:
+            doc = None
+            writes = 0
+            def read(self, *args): return copy.deepcopy(self.doc)
+            def compare_swap(self, table, key, expected, replacement):
+                self.doc = copy.deepcopy(replacement); self.writes += 1; return True
+        client = Fake(); incoming = day()
+        incoming['stories'][0]['content'] = 'word ' * 120
+        with patch.object(p, 'utcnow', return_value='2026-09-11T12:01:00Z'):
+            p.publish_document('days', incoming['date'], incoming, client)
+        self.assertEqual(client.doc['stories'][0]['summaryPublishedAt'], '2026-09-11T12:01:00Z')
+        self.assertEqual(client.doc['stories'][0]['contentReadyAt'], '2026-09-11T12:01:00Z')
+        p.publish_document('days', incoming['date'], incoming, client)
+        self.assertEqual(client.writes, 1)
+        incoming['generatedAt'] = '2026-09-11T12:02:00Z'
+        incoming['stories'][0]['summary'] = 'Changed summary'
+        with patch.object(p, 'utcnow', return_value='2026-09-11T12:03:00Z'):
+            p.publish_document('days', incoming['date'], incoming, client)
+        self.assertEqual(client.doc['stories'][0]['summaryPublishedAt'], '2026-09-11T12:03:00Z')
+        self.assertEqual(client.doc['stories'][0]['contentReadyAt'], '2026-09-11T12:01:00Z')
+        self.assertEqual(client.doc['stories'][1]['summaryPublishedAt'], '2026-09-11T12:01:00Z')
+
+    def test_unchanged_legacy_story_does_not_get_backdated_timestamps(self):
+        from unittest.mock import patch
+        base = day(); base['stories'][0]['content'] = 'word ' * 120
+        class Fake:
+            doc = base
+            def read(self, *args): return self.doc
+            def compare_swap(self, table, key, expected, replacement): self.doc = replacement; return True
+        client = Fake(); incoming = copy.deepcopy(base)
+        incoming['generatedAt'] = '2026-09-11T12:02:00Z'
+        incoming['stories'][0]['section'] = 'Policy'
+        incoming['stories'][0]['summaryPublishedAt'] = '2000-01-01T00:00:00Z'
+        incoming['stories'][0]['contentReadyAt'] = '2000-01-01T00:00:00Z'
+        p.publish_document('days', incoming['date'], incoming, client)
+        self.assertNotIn('summaryPublishedAt', client.doc['stories'][0])
+        self.assertNotIn('contentReadyAt', client.doc['stories'][0])
+
 if __name__ == '__main__': unittest.main()

@@ -3,6 +3,7 @@
 Requires 202609110001_publication_integrity.sql. No fallback to unsafe upserts.
 """
 import copy
+import html
 import json
 import math
 import re
@@ -95,6 +96,30 @@ class Client:
             'p_table': table, 'p_key': key, 'p_expected': expected, 'p_data': replacement}) is True
 
 
+def content_words(value):
+    return len(html.unescape(re.sub(r'<[^>]+>', ' ', str(value or ''))).split())
+
+
+def stamp_editorial(doc, current, now):
+    """Record observed publication transitions, never inferred historical times."""
+    result = copy.deepcopy(doc)
+    previous = {story['id']: story for story in (current or {}).get('stories', [])}
+    for story in result.get('stories', []):
+        before = previous.get(story['id'])
+        # These fields are publication observations; preserve the remote record,
+        # not generator-provided guesses or timestamps copied from another story.
+        for field in ('summaryPublishedAt', 'contentReadyAt'):
+            if before is not None and field in before:
+                story[field] = before[field]
+            else:
+                story.pop(field, None)
+        if before is None or any(story.get(field) != before.get(field) for field in ('title', 'summary')):
+            story['summaryPublishedAt'] = now
+        if content_words(story.get('content')) >= 120 and (before is None or content_words(before.get('content')) < 120):
+            story['contentReadyAt'] = now
+    return result
+
+
 def merge_enrichment(base, edited, current, worker, now):
     """Three-way per-field merge. A changed source URL invalidates the fetch.
 
@@ -109,6 +134,7 @@ def merge_enrichment(base, edited, current, worker, now):
         before, after = old.get(story['id']), new.get(story['id'])
         if before is None or after is None or story.get('url') != before.get('url'):
             continue
+        was_ready = content_words(story.get("content")) >= 120
         touched = False
         for field in ENRICHMENT_FIELDS:
             prior, desired = before.get(field, MISSING), after.get(field, MISSING)
@@ -122,6 +148,8 @@ def merge_enrichment(base, edited, current, worker, now):
         if touched:
             story['enrichedAt'] = now
             story['enrichedBy'] = worker
+            if not was_ready and content_words(story.get('content')) >= 120:
+                story['contentReadyAt'] = now
     if changed:
         result['generatedAt'] = now
         result['publishedAt'] = now
@@ -149,13 +177,14 @@ def publish_document(table, key, doc, client=None):
     client = client or Client()
     validate_document(table, doc)
     current = client.read(table, key)
-    if current is not None and {k: v for k, v in current.items() if k != "publishedAt"} == {k: v for k, v in doc.items() if k != "publishedAt"}:
+    now = utcnow()
+    replacement = stamp_editorial(doc, current, now) if table == "days" else copy.deepcopy(doc)
+    if current is not None and {k: v for k, v in current.items() if k != "publishedAt"} == {k: v for k, v in replacement.items() if k != "publishedAt"}:
         return
     if current is not None:
         old_time = current.get('generatedAt') or current.get('publishedAt')
         if old_time and timestamp(doc.get('generatedAt')) <= timestamp(old_time):
             raise RuntimeError('Refusing stale or same-timestamp replacement: ' + table + '/' + key)
-    replacement = copy.deepcopy(doc)
-    replacement['publishedAt'] = utcnow()
+    replacement['publishedAt'] = now
     if not client.compare_swap(table, key, current, replacement):
         raise RuntimeError('Concurrent publication; reload before publishing ' + table + '/' + key)

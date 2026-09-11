@@ -112,7 +112,7 @@ function extract(html: string): { ok: boolean; html: string; words: number; imag
     if (relaxed.words >= MIN_WORDS) res = relaxed;
   }
   const image = doc.querySelector('meta[property="og:image"]')?.getAttribute("content") || null;
-  return { ok: res.words > MIN_WORDS, html: res.html, words: res.words, image, blocked };
+  return { ok: res.words >= MIN_WORDS, html: res.html, words: res.words, image, blocked };
 }
 
 async function sb(path: string, init: RequestInit = {}): Promise<Response> {
@@ -208,7 +208,12 @@ Deno.serve(async (req: Request) => {
         s.url = `${f.protocol}//${f.host}${f.pathname}`; // canonical publisher URL
       }
       if (out.ok && out.words > wordsIn(s.content)) {
+        const stamp = new Date().toISOString();
+        const wasReady = wordsIn(s.content) >= MIN_WORDS;
         s.content = out.html;
+        s.enrichedAt = stamp;
+        s.enrichedBy = "supabase-edge";
+        if (!wasReady && wordsIn(s.content) >= MIN_WORDS) s.contentReadyAt = stamp;
         if (!s.image && out.image) s.image = out.image;
         delete s.sourceBlocked;
         filled.push(String(s.id));
@@ -221,7 +226,8 @@ Deno.serve(async (req: Request) => {
   }
 
   if (filled.length) {
-    day.generatedAt = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    day.generatedAt = new Date().toISOString();
+    day.publishedAt = day.generatedAt;
     const published = await rpc("audit_publish_fill", {p_day:date,p_expected:expected,p_data:day});
     if (!published) return new Response(JSON.stringify({ok:true,date,conflict:true,filled:[],failed}),{headers:HEADERS});
     // pulse ONLY on progress — a no-op standby must not mask a dead primary
