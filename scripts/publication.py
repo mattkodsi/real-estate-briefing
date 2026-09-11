@@ -108,11 +108,13 @@ def stamp_editorial(doc, current, now):
         before = previous.get(story['id'])
         # These fields are publication observations; preserve the remote record,
         # not generator-provided guesses or timestamps copied from another story.
-        for field in ('summaryPublishedAt', 'contentReadyAt'):
+        for field in ('firstPublishedAt', 'summaryPublishedAt', 'contentReadyAt'):
             if before is not None and field in before:
                 story[field] = before[field]
             else:
                 story.pop(field, None)
+        if before is None:
+            story['firstPublishedAt'] = now
         if before is None or any(story.get(field) != before.get(field) for field in ('title', 'summary')):
             story['summaryPublishedAt'] = now
         if content_words(story.get('content')) >= 120 and (before is None or content_words(before.get('content')) < 120):

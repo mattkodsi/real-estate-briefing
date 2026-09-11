@@ -166,6 +166,20 @@ class TimingTests(unittest.TestCase):
         changed['stories'][0]['imageChecked'] = True
         self.assertNotIn('contentReadyAt', p.merge_enrichment(legacy, changed, legacy, 'test', 'later')['stories'][0])
 
+    def test_first_publication_is_observed_once_without_legacy_backdating(self):
+        incoming = day()
+        incoming['stories'][0]['firstPublishedAt'] = 'invented'
+        first = p.stamp_editorial(incoming, None, 'first')
+        self.assertEqual(first['stories'][0]['firstPublishedAt'], 'first')
+        changed = copy.deepcopy(first)
+        changed['stories'][0]['title'] = 'Revised'
+        changed['stories'][0]['firstPublishedAt'] = 'invented again'
+        revised = p.stamp_editorial(changed, first, 'later')
+        self.assertEqual(revised['stories'][0]['firstPublishedAt'], 'first')
+        self.assertEqual(revised['stories'][0]['summaryPublishedAt'], 'later')
+        legacy = p.stamp_editorial(changed, day(), 'later')
+        self.assertNotIn('firstPublishedAt', legacy['stories'][0])
+
     def test_editorial_timestamps_and_same_input_idempotency(self):
         from unittest.mock import patch
         class Fake:
