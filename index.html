@@ -33,9 +33,9 @@
       <a class="wordmark" href="#/" title="Settings · Latest briefing"><span class="wm-full">Real Estate&nbsp;Briefing</span><span class="wm-short">CRE&nbsp;Briefing</span></a>
       <div class="masthead-right">
         <nav class="date-nav" id="date-nav" aria-label="Change day">
-          <button id="prev-day" class="nav-arrow" aria-label="Previous day">‹</button>
+          <button id="prev-day" class="nav-arrow" aria-label="Previous day"><svg class="ui-chevron ui-chevron-back" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 3 5 5-5 5"/></svg></button>
           <a id="current-date" href="#/history" aria-label="View briefing history"></a>
-          <button id="next-day" class="nav-arrow" aria-label="Next day">›</button>
+          <button id="next-day" class="nav-arrow" aria-label="Next day"><svg class="ui-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 3 5 5-5 5"/></svg></button>
         </nav>
         <button id="bell-btn" class="icon-btn bell-btn" aria-label="Alerts" title="Alerts">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -60,8 +60,8 @@
         <a href="#/" data-tab="briefing">Briefing</a>
         <a href="#/map" data-tab="map">Map</a>
         <a href="#/weekly" data-tab="weekly">Weekly</a>
-        <a href="#/index" data-tab="index">Directory</a>
-        <a href="#/threads" data-tab="threads">Storylines</a>
+        <a href="#/index" data-tab="index">Index</a>
+        <a href="#/threads" data-tab="threads">Stories</a>
         <a href="#/trends" data-tab="trends">Desk</a>
       </nav>
       <a id="rate-strip" class="rate-strip" href="#/rates" hidden></a>
@@ -73,10 +73,10 @@
     <section id="view-briefing" class="view" hidden>
       <p id="empty-state" hidden></p>
       <div id="lede-block" hidden>
-        <div class="lede-col" id="overview-col">
-          <div class="lede-kicker">Overview</div>
+        <details class="lede-col" id="overview-col">
+          <summary>Daily overview</summary>
           <p id="lede"></p>
-        </div>
+        </details>
         <div class="lede-col" id="kp-col">
           <div class="lede-kicker" id="kp-kicker">In brief</div>
           <ul id="key-points"></ul>

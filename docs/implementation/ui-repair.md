@@ -20,3 +20,11 @@ Phone-width matrix: 280, 320, 350, 360, 375, 390, 412, 440, 480 and 600 CSS pixe
 Browser touch-event checks: dragging -110px put the outgoing page at -110px and incoming page at +330px in a 440px viewport. Next/previous, under-threshold cancellation, direction reversal, first-story boundary and reduced-motion cleanup passed without browser errors. The satellite style loaded and Settings/Search navigation worked. Light/dark previews inspected. Automated tests include five new carousel behavior checks alongside the existing suite.
 
 These are browser/emulated-touch checks, not a claim of physical-device testing or owner approval. The owner's visual and motion feedback remains the acceptance standard.
+
+## Disclosure and spacing refinement (v152)
+
+- Replace native disclosure triangles and UI navigation arrow glyphs with a thin SVG chevron. Native summaries rotate it down when open; story-group expansions use the same shape. Map playback uses SVG play/pause icons.
+- Restore the daily overview as a compact, collapsed disclosure, keeping the five quick story lines visible beneath it. Weekly and reference disclosures share its typography and marker treatment.
+- Use Index and Stories at all screen sizes. Index contains People, Companies and Terms; existing deep-link routes stay compatible. Replace the former Storylines wording in navigation, headings, help copy and return links.
+- Align comparable card padding (12px vertical, 14px horizontal), list gaps (8px), block gaps (12px), and section separation (20px). Preserve reading paragraphs, timeline structure, safe areas, one-row chrome and directional auto-hide.
+- Browser checks: 280–1024px width matrix, no horizontal overflow and one navigation row; Briefing, Weekly, Index/Terms, Stories, Desk and Status rendered without runtime errors. Inspected light/dark and expanded states; keyboard disclosure toggling and full-page finger-tracked reader swiping passed. These are emulated browser checks, not physical-device certification.

@@ -6,6 +6,12 @@
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
 const APP_VERSION = "v151";
+
+const CHEVRON_SVG = '<svg class="ui-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 3 5 5-5 5"/></svg>';
+function setActionText(element, text) {
+  element.textContent = text;
+  element.insertAdjacentHTML("beforeend", CHEVRON_SVG);
+}
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1229,7 +1235,7 @@ function route() {
   else if (!chartOpening) requestAnimationFrame(() => window.scrollTo(0, keepY));
 }
 
-// Players + Dictionary now live under one "Almanac" tab, so their views light the
+// People, companies and terms live under one "Index" tab, so their views light the
 // same tab (and their detail pages — profiles, term entries — keep it lit too).
 const VIEW_TO_TAB = { players: "index", dictionary: "index" };
 function showView(name) {
@@ -1294,8 +1300,8 @@ async function renderBriefing(date) {
   const ranked = day.stories || [];
   const featured = ranked.filter(s => s.featured);
   const kps = (featured.length ? featured : ranked).slice(0,5).map(s => ({text:s.quickSummary || s.title,id:s.id}));
-  $("lede-block").hidden = !kps.length;
-  $("overview-col").hidden = true;
+  $("lede-block").hidden = !kps.length && !hasOverview;
+  $("overview-col").hidden = !hasOverview;
   $("lede").textContent = decodeEntities(day.overview || "");
   linkifyElement($("lede"));
 
@@ -1344,7 +1350,7 @@ async function renderBriefing(date) {
     const cal = document.createElement("a");
     cal.className = "watch-cal";
     cal.href = "#/calendar";
-    cal.textContent = "Full calendar →";
+    setActionText(cal, "Full calendar");
     watch.appendChild(cal);
   }
 
@@ -1485,7 +1491,7 @@ function storyMeta(story, expandable) {
   if (expandable) {
     const open = document.createElement("span");
     open.className = "meta-open";
-    open.textContent = "Read ›";
+    setActionText(open, "Read");
     row.appendChild(open);
   } else if (story.url) {
     const a = document.createElement("a");
@@ -2130,7 +2136,7 @@ function openDealPopup(feature) {
     const mk = document.createElement("a");
     mk.className = "pop-market";
     mk.href = `#/market/${encodeURIComponent(p.market)}`;
-    mk.textContent = `View ${p.market} market ›`;
+    setActionText(mk, `View ${p.market} market`);
     div.appendChild(mk);
   }
   state.mapPopup.setLngLat(feature.geometry.coordinates).setDOMContent(div).addTo(state.map);
@@ -2194,7 +2200,9 @@ function renderPlayback(shown) {
   box.innerHTML = "";
   const btn = document.createElement("button");
   btn.className = "map-play-btn";
-  btn.textContent = state.mapPlaying ? "⏸ Pause" : "▶ Play accumulation";
+  btn.innerHTML = state.mapPlaying
+    ? '<svg class="ui-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3v10M11 3v10"/></svg> Pause'
+    : '<svg class="ui-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m5 3 8 5-8 5Z"/></svg> Play accumulation';
   btn.addEventListener("click", () => {
     if (state.mapPlaying) { stopPlayback(); drawDeals(shown, false); renderPlayback(shown); }
     else { startPlayback(shown); renderPlayback(shown); }
@@ -2416,7 +2424,7 @@ async function renderSearch() {
   input.className = "search-input";
   input.type = "search";
   input.placeholder = "Search headlines, summaries, people, terms…";
-  input.setAttribute("aria-label", "Search briefings and directory");
+  input.setAttribute("aria-label", "Search briefings and Index");
   input.value = state.searchQuery || "";
   bar.appendChild(input);
   wrap.appendChild(bar);
@@ -2459,7 +2467,7 @@ function renderSearchResults(root, days, players, terms) {
     if (!saved.length) {
       const p = document.createElement("p");
       p.className = "search-hint";
-      p.textContent = "Search across every briefing, plus the Players roster and Dictionary. Stories you save (★ in the reader) collect here.";
+      p.textContent = "Search every briefing and the people, companies, and terms in Index. Stories you save (★ in the reader) collect here.";
       root.appendChild(p);
       return;
     }
@@ -2514,7 +2522,7 @@ function renderSearchResults(root, days, players, terms) {
     root.appendChild(grid);
   }
   if (termHits.length) {
-    root.appendChild(sectionHead(`Dictionary · ${termHits.length}`));
+    root.appendChild(sectionHead(`Terms · ${termHits.length}`));
     const grid = document.createElement("div");
     grid.className = "player-grid";
     for (const t of termHits.slice(0, state.searchLimit || 80)) grid.appendChild(termCard(t));
@@ -3008,11 +3016,11 @@ function leagueRow({ p, count, volume }, rank) {
 
 /* ---------- The Desk: a ranked board of tools ----------
    Every analytical surface is a tap-through card (same language as Calendar and
-   Threads), ordered by what the reader reaches for most — the running storylines
+   Threads), ordered by what the reader reaches for most — the running stories
    and catalysts first, then the deal-level analytics that sharpen as coverage
    accumulates, then the macro backdrop. Each opens its own full board. */
 const DESK_CATALOG = [
-  { id: "threads", icon: "🧵", title: "Sagas & Tales", blurb: "Running storylines and the sagas that group them", hash: "#/threads" },
+  { id: "threads", icon: "🧵", title: "Sagas & Tales", blurb: "Running stories and the sagas that group them", hash: "#/threads" },
   { id: "calendar", icon: "📅", title: "Calendar", blurb: "Upcoming catalysts — auctions, court dates, Fed decisions", hash: "#/calendar" },
   { id: "league", icon: "🏆", title: "League Tables", blurb: "Most-active buyers, lenders, developers and brokers" },
   { id: "comps", icon: "🏙️", title: "Comps", blurb: "$/sf and $/unit medians by market and asset class" },
@@ -3025,11 +3033,11 @@ const DESK_CATALOG = [
 
 // The landing groups the boards into a sensible order instead of one flat wall of
 // tiles: pricing first (what a NY investor lives on), then market movement, then
-// the storyline/calendar trackers. Market Pulse leads on its own as a live hero.
+// the story/calendar trackers. Market Pulse leads on its own as a live hero.
 const DESK_GROUPS = [
   { label: "Deals & pricing", ids: ["comps", "caprates", "ledger"] },
   { label: "Market movements", ids: ["distress", "league", "coverage"] },
-  { label: "Storylines & dates", ids: ["threads", "calendar"] },
+  { label: "Stories & dates", ids: ["threads", "calendar"] },
 ];
 
 async function renderTrends() {
@@ -3111,7 +3119,7 @@ function deskPulseHero() {
     '<span class="dh-icon">📈</span>' +
     '<span class="dh-titles"><span class="dh-title">Market Pulse</span>' +
     '<span class="dh-blurb">The macro backdrop — rates, home prices, rents and credit, one read</span></span>' +
-    '<span class="dh-arrow">›</span>';
+    '<span class="dh-arrow">'+ CHEVRON_SVG +'</span>';
   const row = document.createElement("div");
   row.className = "dh-stats";
   a.append(head, row);
@@ -3154,7 +3162,7 @@ function deskCard(item, stat) {
     `<span class="dc-icon">${item.icon}</span>` +
     `<span class="dc-body"><span class="dc-title">${item.title}</span>` +
     `<span class="dc-blurb">${item.blurb}</span></span>` +
-    `<span class="dc-foot"><span class="dc-stat">${stat || ""}</span><span class="dc-arrow">›</span></span>`;
+    `<span class="dc-foot"><span class="dc-stat">${stat || ""}</span><span class="dc-arrow">${CHEVRON_SVG}</span></span>`;
   return a;
 }
 
@@ -3514,7 +3522,7 @@ function pulseMarketRow(name, md) {
     c.innerHTML = `<span class="pmk-k">Case-Shiller</span><span class="pmk-v ${g ? "good" : "bad"}">${signed(md.caseShiller.yoy)}%</span>`;
     stats.appendChild(c);
   }
-  const arrow = document.createElement("span"); arrow.className = "pmk-arrow"; arrow.textContent = "›";
+  const arrow = document.createElement("span"); arrow.className = "pmk-arrow"; arrow.innerHTML = CHEVRON_SVG;
   el.append(nm, stats, arrow);
   return el;
 }
@@ -4159,7 +4167,7 @@ async function renderPlayerProfile(slug) {
     if (target) {
       const link = document.createElement("button");
       link.className = "chip chip-filter player-org-link";
-      link.textContent = p.org + " ›";
+      setActionText(link, p.org);
       link.addEventListener("click", () => { location.hash = `/player/${target.slug}`; });
       const row = document.createElement("div");
       row.className = "chips";
@@ -5125,9 +5133,9 @@ function makeReaderPreview(story, date) {
   }
   const thread=part('reader-thread'), canopy=part('reader-canopy');thread.hidden=true;canopy.hidden=true;
   const t=(state.threads || []).find(t=>t.slug===story.thread);
-  if(t) {thread.hidden=false;thread.textContent=`🧵 Part of a tale — ${t.title} · ${(t.entries||[]).length} stories →`;}
+  if(t) {thread.hidden=false;setActionText(thread,`🧵 Part of a tale — ${t.title} · ${(t.entries||[]).length} stories`);}
   const can=state.campaigns && canopyForStory(state.campaigns,story,date);
-  if(can) {canopy.hidden=false;canopy.textContent=`🌳 Part of a saga — ${can.title} · ${(can.branches||[]).length} fronts →`;}
+  if(can) {canopy.hidden=false;setActionText(canopy,`🌳 Part of a saga — ${can.title} · ${(can.branches||[]).length} fronts`);}
   const targetIndex=state.readerNav.list.findIndex(s=>s.id===story.id);
   [...part('reader-progress').children].forEach((el,i)=>{el.className='rp-seg'+(i<targetIndex?' done':i===targetIndex?' cur':'');});
   part('reader-save').textContent=isSaved(date,story.id)?'★':'☆';
@@ -5462,7 +5470,7 @@ async function openReaderRoute(date, id) {
       const t = threads.find((x) => x.slug === story.thread);
       if (!t || !state.reader || state.reader.story.id !== story.id) return; // reader moved on
       const n = (t.entries || []).length;
-      threadEl.textContent = `🧵 Part of a tale — ${t.title} · ${n} ${n === 1 ? "story" : "stories"} →`;
+      setActionText(threadEl, `🧵 Part of a tale — ${t.title} · ${n} ${n === 1 ? "story" : "stories"}`);
       threadEl.href = `#/thread/${t.slug}`;
       threadEl.hidden = false;
     });
@@ -5476,7 +5484,7 @@ async function openReaderRoute(date, id) {
     const c = canopyForStory(campaigns, story, date);
     if (!c || !state.reader || state.reader.story.id !== story.id) return; // reader moved on
     const nb = (c.branches || []).length;
-    canopyEl.textContent = `🌳 Part of a saga — ${c.title} · ${nb} ${nb === 1 ? "front" : "fronts"} →`;
+    setActionText(canopyEl, `🌳 Part of a saga — ${c.title} · ${nb} ${nb === 1 ? "front" : "fronts"}`);
     canopyEl.href = `#/campaign/${c.slug}`;
     canopyEl.hidden = false;
   });
@@ -5606,7 +5614,7 @@ function readerCoverageBlock(story, date, activeIdx) {
     if (readable) {
       const open = document.createElement("span");
       open.className = "cov-open";
-      open.textContent = "Read ›";
+      setActionText(open, "Read");
       row.appendChild(open);
       row.addEventListener("click", () => showReaderVersion(story, date, e.idx));
     } else if (e.url) {
@@ -5886,7 +5894,7 @@ function openStoryPeek(date, id, originRect) {
     if (expandable) {
       const open = document.createElement("button");
       open.className = "peek-open";
-      open.textContent = "Open story →";
+      setActionText(open, "Open story");
       open.addEventListener("click", () => sheetOpenStory(date, id));
       card.appendChild(open);
     }
@@ -5922,7 +5930,7 @@ async function openPlayerSheet(slug, originRect) {
     head.appendChild(watchStar(slug, p.name));
     const arrow = document.createElement("span");
     arrow.className = "sheet-arrow";
-    arrow.textContent = "›";
+    setActionText(arrow, "");
     head.appendChild(arrow);
     card.appendChild(head);
 
@@ -5973,7 +5981,7 @@ async function openPlayerSheet(slug, originRect) {
 
     const full = document.createElement("button");
     full.className = "sheet-full";
-    full.textContent = "Full profile →";
+    setActionText(full, "Full profile");
     full.addEventListener("click", () => sheetGo(`/player/${slug}`));
     card.appendChild(full);
   }, peekOpts);
@@ -5996,12 +6004,12 @@ async function openTermSheet(slug, originRect) {
     nm.textContent = t.term;
     const rl = document.createElement("span");
     rl.className = "sheet-role";
-    rl.textContent = t.category || "Dictionary";
+    rl.textContent = t.category || "Terms";
     ht.append(nm, rl);
     head.appendChild(ht);
     const arrow = document.createElement("span");
     arrow.className = "sheet-arrow";
-    arrow.textContent = "›";
+    setActionText(arrow, "");
     head.appendChild(arrow);
     card.appendChild(head);
 
@@ -6012,7 +6020,7 @@ async function openTermSheet(slug, originRect) {
 
     const full = document.createElement("button");
     full.className = "sheet-full";
-    full.textContent = "Full entry →";
+    setActionText(full, "Full entry");
     full.addEventListener("click", () => sheetGo(`/term/${slug}`));
     card.appendChild(full);
   }, peekOpts);
@@ -6043,7 +6051,7 @@ async function openThreadPeek(slug, originRect) {
     head.appendChild(ht);
     const arrow = document.createElement("span");
     arrow.className = "sheet-arrow";
-    arrow.textContent = "›";
+    setActionText(arrow, "");
     head.appendChild(arrow);
     card.appendChild(head);
 
@@ -6078,7 +6086,7 @@ async function openThreadPeek(slug, originRect) {
 
     const full = document.createElement("button");
     full.className = "sheet-full";
-    full.textContent = "Full timeline →";
+    setActionText(full, "Full timeline");
     full.addEventListener("click", () => sheetGo(`/thread/${slug}`));
     card.appendChild(full);
   }, peekOpts);
@@ -6111,7 +6119,7 @@ async function openCanopyPeek(slug, originRect) {
     head.appendChild(ht);
     const arrow = document.createElement("span");
     arrow.className = "sheet-arrow";
-    arrow.textContent = "›";
+    setActionText(arrow, "");
     head.appendChild(arrow);
     card.appendChild(head);
 
@@ -6151,7 +6159,7 @@ async function openCanopyPeek(slug, originRect) {
 
     const full = document.createElement("button");
     full.className = "sheet-full";
-    full.textContent = "Open the tree →";
+    setActionText(full, "Open the tree");
     full.addEventListener("click", () => sheetGo(`/campaign/${slug}`));
     card.appendChild(full);
   }, peekOpts);
@@ -6373,12 +6381,7 @@ function ensureBottomNav() {
     const link = document.createElement("a");
     link.href = a.getAttribute("href");
     if (a.dataset.tab) link.dataset.tab = a.dataset.tab;
-    const shortLabel = {index:'Index',threads:'Stories'}[a.dataset.tab];
-    if(shortLabel) {
-      const full=document.createElement('span');full.className='nav-label-full';full.textContent=a.textContent;
-      const short=document.createElement('span');short.className='nav-label-short';short.textContent=shortLabel;
-      link.append(full,short);link.setAttribute('aria-label',a.textContent);
-    } else link.textContent=a.textContent;
+    link.textContent = a.textContent;
     nav.appendChild(link);
   }
   // host the bar in a full-viewport fixed LAYER (one stable fixed element that
@@ -7082,7 +7085,7 @@ function renderTermOfDay(wrap, all) {
 
     const full = document.createElement("button");
     full.className = "totd-chip quiet";
-    full.textContent = "Full entry →";
+    setActionText(full, "Full entry");
     full.addEventListener("click", () => { location.hash = `/term/${t.slug}`; });
     actions.appendChild(full);
 
@@ -7597,8 +7600,8 @@ async function renderThreads() {
   const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
   const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
-  wrap.appendChild(pageHead("Storylines",
-    "Running storylines the briefing is tracking. A tale is one exact storyline — the same property, deal, case, or company event; a saga groups several tales under one driver. Tap any to open its timeline right here."));
+  wrap.appendChild(pageHead("Stories",
+    "Running stories the briefing is tracking. A tale is one exact story — the same property, deal, case, or company event; a saga groups several tales under one driver. Tap any to open its timeline right here."));
   const [threads, campaigns] = await Promise.all([getThreads(), getCampaigns()]);
   if (!isCurrentRender()) return;
   if (!threads.length && !campaigns.length) {
@@ -7639,7 +7642,7 @@ async function renderThreads() {
     if (campaigns.length) {
       const sub = document.createElement("p");
       sub.className = "thread-group-head";
-      sub.textContent = "🧵 Tales — every tracked storyline";
+      sub.textContent = "🧵 Tales — every tracked story";
       wrap.appendChild(sub);
     }
     const list = document.createElement("div");
@@ -7666,7 +7669,7 @@ function arcItem(kind, obj, threadMap, sagaTitle) {
   panel.appendChild(inner);
   const caret = document.createElement("span");
   caret.className = "arc-caret";
-  caret.textContent = "›";
+  setActionText(caret, "");
   card.querySelector(".thread-card-top")?.appendChild(caret);
 
   let built = false;
@@ -7678,7 +7681,7 @@ function arcItem(kind, obj, threadMap, sagaTitle) {
     const more = document.createElement("a");
     more.className = "arc-fullpage";
     more.href = kind === "canopy" ? `#/campaign/${slug}` : `#/thread/${slug}`;
-    more.textContent = "Open full page ›";
+    setActionText(more, "Open full page");
     more.addEventListener("click", (e) => e.stopPropagation());
     inner.appendChild(more);
   };
@@ -7758,11 +7761,11 @@ async function renderThread(slug) {
   const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
   const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("Storylines", "#/threads"));
+  wrap.appendChild(backLink("Stories", "#/threads"));
   const threads = await getThreads();
   if (!isCurrentRender()) return;
   const t = threads.find((x) => x.slug === slug);
-  if (!t) { wrap.appendChild(emptyPanel("Storyline not found", "This storyline isn't on record.")); return; }
+  if (!t) { wrap.appendChild(emptyPanel("Story not found", "This story isn't on record.")); return; }
 
   const head = document.createElement("div");
   head.className = "thread-head";
@@ -7854,11 +7857,11 @@ async function renderCampaign(slug) {
   const renderOwner = Symbol(); wrap.renderOwner = renderOwner;
   const isCurrentRender = () => wrap.renderOwner === renderOwner && !wrap.closest('.view')?.hidden;
   wrap.innerHTML = "";
-  wrap.appendChild(backLink("Storylines", "#/threads"));
+  wrap.appendChild(backLink("Stories", "#/threads"));
   const [campaigns, threads] = await Promise.all([getCampaigns(), getThreads()]);
   if (!isCurrentRender()) return;
   const c = campaigns.find((x) => x.slug === slug);
-  if (!c) { wrap.appendChild(emptyPanel("Saga not found", "This storyline isn't on record.")); return; }
+  if (!c) { wrap.appendChild(emptyPanel("Saga not found", "This story isn't on record.")); return; }
   const threadMap = new Map(threads.map((t) => [t.slug, t]));
 
   // Head — the 🌳 mark, title, status
@@ -7944,7 +7947,7 @@ function canopyBodyEl(c, threadMap) {
       const link = document.createElement("a");
       link.className = "branch-threadlink";
       link.href = `#/thread/${b.thread}`;
-      link.textContent = "tale ›";
+      setActionText(link, "tale");
       link.addEventListener("click", (e) => e.stopPropagation());
       bh.appendChild(link);
     }
@@ -8152,7 +8155,7 @@ function renderCalendarMonth(wrap, events, storyIndex) {
   label.className = "cal-nav-label";
   label.textContent = new Date(Y, M - 1, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const next = document.createElement("button");
-  next.className = "cal-navbtn"; next.textContent = "›"; next.setAttribute("aria-label", "Next month");
+  next.className = "cal-navbtn"; setActionText(next, ""); next.setAttribute("aria-label", "Next month");
   next.addEventListener("click", () => { state.calMonth = shiftMonth(state.calMonth, 1); state.calDay = null; renderCalendar(); });
   nav.append(prev, label, next);
   wrap.appendChild(nav);
@@ -8241,7 +8244,7 @@ function eventRow(e, isPast, storyIndex) {
   if (src) {
     const s = document.createElement("div");
     s.className = "cal-src";
-    s.textContent = srcStory ? `From: ${srcStory.title} →` : "Read the source story →";
+    setActionText(s, srcStory ? `From: ${srcStory.title}` : "Read the source story");
     body.appendChild(s);
   }
   open.append(date, body);
@@ -8836,7 +8839,7 @@ async function renderAlerts() {
   const calLink = document.createElement("a");
   calLink.href = "#/calendar";
   calLink.className = "inline-link";
-  calLink.textContent = "Open the calendar →";
+  setActionText(calLink, "Open the calendar");
   evNote.appendChild(calLink);
   sendCard.appendChild(evNote);
   wrap.appendChild(sendCard);

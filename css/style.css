@@ -351,7 +351,7 @@ main {
 .story-group {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 11px;
+  gap: var(--space-list);
 }
 
 /* ---------- Lede ---------- */
@@ -3747,9 +3747,63 @@ body.reader-open #bn-layer { visibility:hidden; }
   #current-date .date-compact { display:inline; }
 }
 
-.nav-label-short { display:none; }
+
 @media (max-width:350px) {
   :root[data-look="updated"] #bottom-nav a { font-size:9.5px; }
-  #bottom-nav .nav-label-full { display:none; }
-  #bottom-nav .nav-label-short { display:inline; }
 }
+
+/* Shared compact rhythm: related rows 8px, card inset 12/14px, sections 20px.
+   Reading paragraphs, timeline connectors, safe areas and chrome retain their
+   own intentional spacing rather than inheriting a blanket reset. */
+:root { --space-list:8px; --space-block:12px; --space-section:20px; --card-inset:12px 14px; }
+.story-group, .thread-list, .arc-list, .theme-grid, .player-grid, .desk-grid { gap:var(--space-list); }
+.story, .thread-card, .player-card, .theme, .desk-card { padding:var(--card-inset); }
+.page-head { margin:4px 0 var(--space-block); }
+.section-head { margin:var(--space-section) 0 var(--space-list); }
+.section-head:first-child { margin-top:var(--space-block); }
+.desk-group-label { margin:var(--space-section) 0 var(--space-list); }
+.thread-list, .arc-list, .desk-grid { margin-bottom:var(--space-block); }
+.chips { gap:6px; margin-top:8px; }
+:root[data-look="updated"] #lede-block { gap:var(--space-list); margin:4px 0 var(--space-block); }
+:root[data-look="updated"] #overview-col,
+:root[data-look="updated"] #kp-col { padding:var(--card-inset); }
+#overview-col { margin-bottom:var(--space-list); }
+:root[data-look="updated"] #overview-col { margin-bottom:0; }
+#overview-col > summary { padding:0; min-height:24px; }
+#overview-col #lede { margin-top:8px; font-size:13px; line-height:1.55; }
+#kp-kicker { margin-bottom:4px; }
+#key-points li { padding-top:5px; padding-bottom:5px; }
+#key-points li::before { top:12px; }
+:root[data-look="updated"] .controls { margin-top:var(--space-block); }
+.arc-item.open .arc-expand-inner { padding:0 14px 12px; }
+.arc-expand-inner > .timeline,
+.arc-expand-inner > .canopy-body { padding-top:12px; }
+.arc-fullpage { margin-top:12px; }
+.weekly-synthesis { margin-bottom:12px; }
+#weekly-content .weekly-synthesis .week-overview { margin:8px 0 0; }
+
+/* Replace platform triangle/emoji markers with the same thin rotating chevron.
+   Native details keeps keyboard, touch and accessibility behavior intact. */
+summary { list-style:none; cursor:pointer; }
+summary::-webkit-details-marker { display:none; }
+summary::marker { content:""; }
+details > summary {
+  display:flex; align-items:center; gap:8px;
+  font:600 14px/1.4 var(--serif); color:var(--ink);
+}
+details > summary::after {
+  content:""; display:block; flex:0 0 14px; width:14px; height:14px;
+  margin-left:auto; background:currentColor; color:var(--ink-3);
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m6 3 5 5-5 5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m6 3 5 5-5 5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  transition:transform 180ms ease;
+}
+details[open] > summary::after { transform:rotate(90deg); color:var(--accent); }
+.weekly-synthesis > summary, .research-references > summary { display:flex; padding:6px 0; margin:0; font:600 14px/1.4 var(--serif); }
+summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; border-radius:3px; }
+.ui-chevron { display:inline-block; width:14px; height:14px; vertical-align:-2px; margin-left:4px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; flex:none; }
+.ui-chevron-back { transform:rotate(180deg); }
+.arc-caret { display:flex; }
+.arc-caret .ui-chevron, .nav-arrow .ui-chevron, .map-play-btn .ui-chevron { margin:0; }
+.nav-arrow .ui-chevron { width:12px; height:12px; }
+@media (prefers-reduced-motion:reduce) { details > summary::after { transition:none; } }
