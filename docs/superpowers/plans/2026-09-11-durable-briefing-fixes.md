@@ -19,8 +19,10 @@ User-approved scope: fix the complete September 11 audit and GitHub failures; pr
 - [x] Editorial repair: verify and correct MF1 downstream profiles, financing/size mismatches, short summaries, partial content and attribution; recover available missing-source coverage.
 - [x] Summaries: require compact source-backed quickSummary in new publication; ready notification uses ranked complete short lines without truncating financial claims.
 - [x] Timing: receipt mapping support without invented Gmail metadata; private token-authorized device acknowledgements; measured stages remain distinct in report/UI.
-- [ ] Integration: full tests, independent review, safe live migrations/functions, actual browser worker run, fresh data readbacks, mobile smoke, merge/release and branch cleanup.
+- [x] Integration: full tests, independent review, safe live migrations/functions, actual browser worker run, fresh data readbacks, mobile smoke and merge/release. Optional branch cleanup was blocked by automatic approval review and left intact.
 
 ## Evidence ledger
 - Baseline: 65 JS/PostgreSQL + 50 Python tests passed on b033a08. Those checks did not exercise the broken hosted browser runtime.
 - Gmail connector query for September 10–11 newsletters returned no results; not proof of an empty mailbox. Historical email-to-story timing cannot be reconstructed from this access.
+
+Final evidence and explicit external/archival limitations: [durable-fixes-release.md](../../implementation/durable-fixes-release.md).

@@ -35,4 +35,6 @@ Archival evidence coverage remains incomplete: 652 priced stories lack full tran
 
 ## Release state
 
-Frontend deployment and final hosted verification are pending. Update this section only after the release is verified.
+Released as **v154**, commit **cbfcdf5f6031eb772dfd099a11fa834e87ce95b2**. All nine hosted asset hashes match the reviewed local files. [Production regression checks](https://github.com/mattkodsi/real-estate-briefing/actions/runs/34633837414) and [Pages deployment](https://github.com/mattkodsi/real-estate-briefing/actions/runs/34633836145) passed. A fresh public-app browser session loaded all v154 scripts and displayed the $1.25B badge correctly at width 440 without document overflow. Fresh production readback confirms 38 short summaries, 33 valid reader bodies, and five explicitly unavailable readers. The primary heartbeat records completed, filled 1, failed 5 for the successful real worker run.
+
+Optional removal of the merged branch and temporary checkout was rejected by automatic approval review because explicit cleanup authorization was absent. Both were left intact; release and production verification are unaffected.
