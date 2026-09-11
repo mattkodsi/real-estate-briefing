@@ -60,7 +60,7 @@ def validate_document(table, doc):
             if story['id'] in ids:
                 raise ValueError('Duplicate story id: ' + story['id'])
             ids.add(story['id'])
-    def walk(value):
+    def walk(value, parent=None):
         if isinstance(value, dict):
             for key, item in value.items():
                 if key in ('url', 'image') and item is not None:
@@ -69,10 +69,12 @@ def validate_document(table, doc):
                     parsed = urllib.parse.urlparse(item)
                     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
                         raise ValueError(key + ' must be an HTTP(S) URL')
-                if key in ('valueUsd', 'noi', 'sizeSqft', 'units', 'capRate') and item is not None:
+                # Evidence is keyed by the field it documents; the actual
+                # financial value remains validated on the story itself.
+                if parent != 'fieldEvidence' and key in ('valueUsd', 'noi', 'sizeSqft', 'units', 'capRate') and item is not None:
                     if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) or item < 0:
                         raise ValueError(key + ' must be a finite nonnegative number')
-                walk(item)
+                walk(item, key)
         elif isinstance(value, list):
             for item in value: walk(item)
     walk(doc)

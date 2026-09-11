@@ -11,7 +11,7 @@ test('receipt database accepts only attempted recent jobs with token and preserv
   await db.exec(`create role anon;create role authenticated;create role service_role;
     create table audit_push_jobs(id bigint primary key,attempts int,created_at timestamptz default now());
     insert into audit_push_jobs values(1,1,now()),(2,0,now()),(3,1,now()-interval '8 days');`);
-  await db.exec(await readFile(new URL('../supabase/migrations/20260911175645_device_delivery_receipts.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../supabase/migrations/20260911181139_device_delivery_receipts.sql',import.meta.url),'utf8'));
   let row=(await db.query('select * from audit_push_jobs where id=1')).rows[0];
   assert.ok(row.receipt_token);assert.equal(row.device_received_at,null);assert.equal(row.device_displayed_at,null);
   await db.query('update audit_push_jobs set receipt_token=$1',[token]);
