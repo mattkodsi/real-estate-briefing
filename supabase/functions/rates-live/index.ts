@@ -152,7 +152,7 @@ Deno.serve(async (req: Request) => {
       if (!validDate(currentDate)) throw new Error(`Missing or invalid ${label} date`);
       if (previousDate && String(currentDate) < String(previousDate)) throw new Error(`Regressed ${label} date`);
     }
-    if (!["30d", "90d", "180d"].every(period => Number.isFinite(fresh.sofrAverages[period])))
+    if (!(["30d", "90d", "180d"] as const).every(period => Number.isFinite(fresh.sofrAverages[period])))
       throw new Error("Incomplete SOFR averages");
     if (!["1M","3M","6M","1Y","2Y","5Y","10Y","30Y"].every(t=>Number.isFinite(fresh.treasury[t]))) throw new Error("Incomplete Treasury curve");
     await writeCache(fresh);
