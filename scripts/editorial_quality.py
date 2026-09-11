@@ -37,6 +37,27 @@ def prepare_editorial(doc,current=None):
     before={s['id']:s for s in (current or {}).get('stories',[])}
     for s in result.get('stories',[]):
         prior=before.get(s['id'],{})
+        # Reviewed thread corrections survive generators unaware of this field.
+        # Do not validate every new thread here: the batch publishes days before
+        # creating their new thread records. Only known reviewed mistakes block.
+        review=prior.get('threadReview')
+        if isinstance(review,dict) and review.get('status') in ('resolved','unavailable'):
+            original=review.get('original')
+            if not isinstance(original,dict) or original.get('id')!=s['id'] or original.get('date')!=result.get('date') or not original.get('thread') or not review.get('evidence') or not review.get('reviewedAt'):
+                raise ValueError('Invalid persisted thread review')
+            if 'threadReview' in s and s['threadReview']!=review:
+                raise ValueError('Changing a reviewed thread correction requires an evidence-reviewed repair')
+            s['threadReview']=copy.deepcopy(review)
+            if s.get('thread')==original['thread']:
+                raise ValueError('Previously corrected dangling thread reintroduced')
+            if review['status']=='resolved':
+                target=review.get('target')
+                if not isinstance(target,str) or not target:
+                    raise ValueError('Invalid resolved thread target')
+                if 'thread' not in s:
+                    s['thread']=target
+                elif s['thread']!=target:
+                    raise ValueError('Changing a reviewed thread target requires an evidence-reviewed repair')
         # A fetched-source correction cannot be silently undone by an older
         # generator's headline-only rewrite. Source review must update evidence.
         for field in ('fieldEvidence','identityCorrections'):

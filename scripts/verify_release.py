@@ -8,7 +8,7 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 ASSETS = ['index.html', 'css/style.css', 'js/app.js', 'js/profile-store.js',
-          'js/data-client.js', 'js/briefing-core.js', 'js/overlay-focus.js', 'sw.js']
+          'js/data-client.js', 'js/briefing-core.js', 'js/research-identities.js', 'js/overlay-focus.js', 'sw.js']
 
 def verify(version, attempts=60):
     expected = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in ASSETS}

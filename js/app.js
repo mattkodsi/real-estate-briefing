@@ -72,7 +72,7 @@ function typeInfo(t) {
 
 function fmtValue(n) {
   if (!n) return null;
-  if (n >= 1e9) return "$" + (n / 1e9).toFixed(n % 1e9 ? 1 : 0) + "B";
+  if (n >= 1e9) return "$" + (n / 1e9).toFixed(2).replace(/\.?0+$/, "") + "B";
   if (n >= 1e6) return "$" + (n / 1e6).toFixed(n % 1e6 >= 1e5 ? 1 : 0).replace(/\.0$/, "") + "M";
   return "$" + Math.round(n / 1e3) + "K";
 }

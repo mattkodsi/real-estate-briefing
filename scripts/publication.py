@@ -234,6 +234,9 @@ def publish_document(table, key, doc, client=None):
     if current is not None and {k:v for k,v in current.items() if k != 'publishedAt'} == {k:v for k,v in doc.items() if k != 'publishedAt'}:
         return
     now = utcnow()
+    # stamp_editorial preserves reviewed thread corrections and rejects known
+    # dangling targets. Broad existence checks need a batch overlay first:
+    # push_data currently publishes each day before its newly-created threads.
     replacement = stamp_editorial(doc, current, now) if table == "days" else copy.deepcopy(doc)
     if current is not None and {k: v for k, v in current.items() if k != "publishedAt"} == {k: v for k, v in replacement.items() if k != "publishedAt"}:
         return
