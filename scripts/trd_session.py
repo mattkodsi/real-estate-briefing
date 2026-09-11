@@ -32,9 +32,13 @@ notes say TRD fetches hit the paywall.
 WordPress login for the rare account that has one, but --cookie is preferred.)
 """
 import getpass
+import hashlib
 import http.cookiejar
 import json
 import os
+import secrets
+import subprocess
+import tempfile
 import re
 import sys
 import urllib.parse
@@ -75,19 +79,53 @@ def owner_secret() -> str:
     return secret
 
 
+def _cli_ticket(domain: str) -> str:
+    """Use the operator's existing CLI login; never extract or expose its credential."""
+    token = secrets.token_hex(32)
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    # Inputs are an exact domain allowlist and a generated hexadecimal hash.
+    sql = f"select public.issue_capture_ticket('{digest}', '{domain}') as issued;\n"
+    try:
+        with tempfile.TemporaryDirectory(prefix="cre-capture-") as directory:
+            path = os.path.join(directory, "issue.sql")
+            with open(path, "w", encoding="utf-8") as output:
+                output.write(sql)
+            result = subprocess.run(
+                ["supabase", "db", "query", "--linked", "--project-ref", "uhwdnmbxiopfysodydty",
+                 "--file", path],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+        if result.returncode != 0:
+            raise ValueError("CLI failed")
+        response = json.loads(result.stdout)
+        rows = response.get("rows") if isinstance(response, dict) else None
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict) or rows[0].get("issued") is not True:
+            raise ValueError("Invalid acknowledgment")
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        raise SystemExit("Could not confirm ticket issuance. Sign in to the Supabase CLI with the owner account and retry. No reusable credential was displayed.") from None
+    return token
+
+
 def issue_ticket() -> None:
-    req = urllib.request.Request(
-        f"{SUPABASE_URL}/functions/v1/store-session",
-        data=json.dumps({"action": "issue-ticket", "domain": _domain()}).encode(),
-        headers={"apikey": ANON_KEY, "Content-Type": "application/json", "x-audit-secret": owner_secret()},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        body = json.load(resp)
-    if not body.get("ok"):
-        raise SystemExit("Could not issue an owner capture ticket.")
-    print(f"One-use capture ticket for {body['domain']} (expires in 10 minutes):")
-    print(body["captureToken"])
+    domain = _domain()
+    if domain not in {"therealdeal.com", "inman.com", "bisnow.com"}:
+        raise SystemExit("Unsupported publisher for owner capture.")
+    if not os.environ.get("AUDIT_PIPELINE_SECRET", "").strip():
+        token = _cli_ticket(domain)
+    else:
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/functions/v1/store-session",
+            data=json.dumps({"action": "issue-ticket", "domain": domain}).encode(),
+            headers={"apikey": ANON_KEY, "Content-Type": "application/json", "x-audit-secret": owner_secret()},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.load(resp)
+        if not body.get("ok") or body.get("domain") != domain or not re.fullmatch(r"[a-f0-9]{64}", str(body.get("captureToken", ""))):
+            raise SystemExit("Could not issue an owner capture ticket.")
+        token = body["captureToken"]
+    print(f"One-use capture ticket for {domain} (expires in 10 minutes):")
+    print(token)
 
 
 def store(cookie_header: str, how: str) -> None:
