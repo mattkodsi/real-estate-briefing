@@ -9,3 +9,10 @@ verify_jwt = false
 verify_jwt = false
 [functions.push-dispatch]
 verify_jwt = false
+
+[functions.store-session]
+verify_jwt = false
+[functions.rates-live]
+verify_jwt = false
+[functions.market-pulse]
+verify_jwt = false

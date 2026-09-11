@@ -3,7 +3,7 @@
 // The cloud routine can't send pushes (no egress), so this function watches
 // the PUBLISHED data — the same pattern as the fill-content standby — and
 // turns it into notifications:
-//   1. breaking   — special-cadence stories in today's day → everyone opted in
+//   1. breaking   — explicitly eligible recent stories → everyone opted in
 //   2. ready      — the day's first edition → profiles who opted IN (off by default)
 //   3. watchlist  — a watched player mentioned today → that profile
 //   4. events     — a starred calendar event dated today (from ~8 AM ET)
@@ -13,6 +13,7 @@
 // 9 PM–7 AM ET; unlogged items simply go out on the first morning run.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
+import { pushCopy, discoveryDates, checkedFetch, isPushEligible } from "../_shared/backend-policy.mjs";
 import { drainDeliveries } from "../_shared/audit-delivery.mjs";
 import * as webpush from "jsr:@negrel/webpush@0.3.0";
 
@@ -22,7 +23,7 @@ const HEADERS = { "Content-Type": "application/json" };
 const CONTACT = "mailto:mfkodsi@gmail.com";
 
 async function sb(path: string, init: RequestInit = {}): Promise<Response> {
-  const response = await fetch(`${SB_URL}/rest/v1/${path}`, {
+  const response = await checkedFetch(`${SB_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
                "Content-Type": "application/json", Prefer: "resolution=merge-duplicates",
@@ -57,43 +58,6 @@ function nowET(): { date: string; hour: number } {
   return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: parseInt(get("hour")) % 24 };
 }
 
-// --- Notification text: sized so Apple never truncates or ellipsizes ----------
-// A deal-type glyph carries the "kind" in place of a word; the routine supplies a
-// crafted short pushTitle per breaking story (we trim the headline as a fallback).
-const TYPE_ICON: Record<string, string> = {
-  Sale: "🔑", Financing: "💰", Lease: "📝", Development: "🏗️", Distress: "📉",
-  Legal: "⚖️", Policy: "🏛️", Industry: "🏢", Markets: "📊",
-};
-// Trim to a whole word, never mid-word, never a trailing "…".
-function clip(s: string, max: number): string {
-  s = (s || "").replace(/\s+/g, " ").trim();
-  if (s.length <= max) return s;
-  let cut = s.slice(0, max);
-  const sp = cut.lastIndexOf(" ");
-  if (sp > 0) cut = cut.slice(0, sp);
-  return cut.replace(/[\s.,;:—–-]+$/, "");
-}
-// Body: a whole short summary as-is, else clipped to end on a clean clause
-// boundary (comma/dash) with any dangling connective/article dropped.
-function bodyText(s: string, max = 170): string {
-  s = (s || "").replace(/\s+/g, " ").trim();
-  if (s.length <= max) return s;
-  let cut = s.slice(0, max);
-  cut = cut.slice(0, cut.lastIndexOf(" "));
-  const cb = Math.max(cut.lastIndexOf(", "), cut.lastIndexOf("; "),
-    cut.lastIndexOf(" -- "), cut.lastIndexOf(" — "), cut.lastIndexOf(" – "));
-  if (cb > max * 0.5) cut = cut.slice(0, cb);
-  cut = cut.replace(/[\s.,;:—–-]+$/, "");
-  cut = cut.replace(/\s+(?:a|an|the|of|to|and|or|with|for|in|on|at|its|from|by|as|that|which|after|before|not)$/i, "");
-  return cut;
-}
-// Breaking heading: deal-type glyph + crafted micro-headline (or trimmed headline).
-function breakingTitle(s: { dealType?: string; pushTitle?: string; title?: string }): string {
-  const icon = TYPE_ICON[s.dealType || ""] || "⚡";
-  const head = (s.pushTitle && s.pushTitle.trim()) || clip(s.title || "", 26);
-  return `${icon} ${head}`;
-}
-
 Deno.serve(async (req: Request) => {
   const denied = denyUnlessAuthorized(req); if (denied) return denied;
   try {
@@ -119,25 +83,35 @@ Deno.serve(async (req: Request) => {
     }
 
     const deliver = async (profiles: string[], payload: Record<string, unknown>) => {
-      if(profiles.length) await rpc("audit_enqueue_push", {p_event:payload.tag,p_profiles:profiles,p_payload:payload});
+      if(profiles.length) await rpc("audit_enqueue_push", {p_event:payload.tag,p_profiles:profiles,p_payload:{...payload,...pushCopy(payload.title,payload.body)}});
     };
 
-    const dayRows = await (await sb(`days?date=eq.${today}&select=data`)).json();
-    const day = dayRows?.[0]?.data;
+    const [yesterday] = discoveryDates(today);
+    const dayRows = await (await sb(`days?date=gte.${yesterday}&date=lte.${today}&select=date,data`)).json();
+    const day = dayRows.find((d:any)=>d.date===today)?.data;
+    const discoverable = new Set(await rpc('audit_discover_stories',{p_days:dayRows,p_today:today}));
     const sentIds: string[] = [];
+    // Profile/story dedupe across breaking and watchlist reasons, including earlier runs.
+    const [watchSeen, breakingJobs] = await Promise.all([
+      (await sb(`audit_watch_seen?day=gte.${yesterday}&day=lte.${today}&select=profile,day,story_id`)).json(),
+      (await sb(`audit_push_jobs?event_id=like.spec:*&created_at=gte.${yesterday}T00:00:00Z&state=in.(pending,retry,sending,sent)&select=profile,event_id`)).json(),
+    ]);
+    const watchedAlready = new Set(watchSeen.map((r:any)=>`${r.profile}:${r.day}:${r.story_id}`));
+    const breakingAlready = new Set(breakingJobs.map((r:any)=>`${r.profile}:${r.event_id.slice(5)}`));
 
-    // 1) breaking: special-cadence stories, one push each, ever
-    for (const s of day?.stories || []) {
-      if (s.cadence !== "special") continue;
-      const id = `spec:${today}:${s.id}`;
-      const to = [...subscribed].filter((p) => notifOf(p).breaking !== false);
+    // 1) Explicit editorial breaking eligibility, independent of newsletter cadence.
+    for (const row of dayRows) for (const s of row.data?.stories || []) {
+      if (!isPushEligible(s) || !discoverable.has(`${row.date}:${s.id}`)) continue;
+      const id = `spec:${row.date}:${s.id}`;
+      const to = [...subscribed].filter((p) => notifOf(p).breaking !== false && !watchedAlready.has(`${p}:${row.date}:${s.id}`));
       if (to.length) {
         await deliver(to, {
-          title: breakingTitle(s),
-          body: bodyText(s.pushBody || s.summary || ""),
-          url: `./#/story/${today}/${s.id}`,
+          title: s.pushTitle || s.title,
+          body: s.pushBody || s.summary || "",
+          url: `./#/story/${row.date}/${encodeURIComponent(s.id)}`,
           tag: id,
         });
+        for (const profile of to) breakingAlready.add(`${profile}:${row.date}:${s.id}`);
         sentIds.push(id);
       }
     }
@@ -150,8 +124,8 @@ Deno.serve(async (req: Request) => {
         if (to.length) {
           await deliver(to, {
             title: "Today's briefing is ready",
-            body: bodyText(day.overview || ""),
-            url: "./",
+            body: "Open today’s ranked real estate news.",
+            url: `./#/day/${today}`,
             tag: id,
           });
           sentIds.push(id);
@@ -167,20 +141,24 @@ Deno.serve(async (req: Request) => {
           notifOf(r.profile).watch !== false) watchers.set(r.profile, w);
     }
     if (watchers.size) {
-      const union = [...new Set([...watchers.values()].flat())];
+      const union = [...new Set([...watchers.values()].flat())].filter(s=>/^[a-z0-9-]+$/.test(s));
       const playerRows = await (await sb(
         `players?select=slug,data&slug=in.(${union.map((s) => `"${s}"`).join(",")})`,
       )).json();
+      for (const discoveryDay of discoveryDates(today)) {
       const todayMentions = new Map<string, { name: string; id: string; title: string }[]>();
       for (const row of playerRows || []) {
-        const hits = (row.data?.mentions || []).filter((m: { date: string }) => m.date === today);
+        const hits = (row.data?.mentions || []).filter((m: { date: string }) => m.date === discoveryDay && discoverable.has(`${m.date}:${(m as any).id}`));
         if (hits.length) todayMentions.set(row.slug, hits.map((m: { id: string; title: string }) =>
           ({ name: row.data.name, id: m.id, title: m.title })));
       }
       for (const [profile, slugs] of watchers) {
-        const items = slugs.flatMap(slug => (todayMentions.get(slug) || []).map(m => ({...m,slug})));
-        if(items.length) await rpc("audit_enqueue_watch", {p_profile:profile,p_day:today,p_items:items});
+        const items = slugs.flatMap(slug => (todayMentions.get(slug) || []).map(m => ({...m,slug})))
+          .filter(m=>!breakingAlready.has(`${profile}:${discoveryDay}:${m.id}`));
+        if(items.length) await rpc("audit_enqueue_watch", {p_profile:profile,p_day:discoveryDay,p_items:items});
       }
+    }
+
     }
 
     // 4) starred calendar events dated today (morning reminder, from 8 AM)
@@ -195,9 +173,9 @@ Deno.serve(async (req: Request) => {
             if (!stars.includes(ev.id)) continue;
             const id = `event:${r.profile}:${ev.id}`;
             await deliver([r.profile], {
-              title: `Today: ${clip(ev.data.title || "", 24)}`,
-              body: ev.data.market && ev.data.market !== "National" ? ev.data.market : "",
-              url: "./",
+              title: "Saved event today",
+              body: ev.data.title || "Open your saved calendar event.",
+              url: `./#/calendar?event=${encodeURIComponent(ev.id)}`,
               tag: id,
             });
             sentIds.push(id);
@@ -211,6 +189,6 @@ Deno.serve(async (req: Request) => {
     });
     return new Response(JSON.stringify({ ok: true, date: today, queued: sentIds, ...delivery }), { headers: HEADERS });
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, error: String(e).slice(0, 300) }), { headers: HEADERS });
+    return new Response(JSON.stringify({ ok: false, error: String(e).slice(0, 300) }), { status: 500, headers: HEADERS });
   }
 });

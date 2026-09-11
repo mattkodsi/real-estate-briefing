@@ -34,6 +34,7 @@ WordPress login for the rare account that has one, but --cookie is preferred.)
 import getpass
 import http.cookiejar
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -67,6 +68,28 @@ def _domain() -> str:
     return "therealdeal.com"
 
 
+def owner_secret() -> str:
+    secret = os.environ.get("AUDIT_PIPELINE_SECRET", "").strip()
+    if not secret:
+        raise SystemExit("Owner capture requires AUDIT_PIPELINE_SECRET in your local environment. Never paste this credential into the app. Ask the operator to configure it, then retry.")
+    return secret
+
+
+def issue_ticket() -> None:
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/functions/v1/store-session",
+        data=json.dumps({"action": "issue-ticket", "domain": _domain()}).encode(),
+        headers={"apikey": ANON_KEY, "Content-Type": "application/json", "x-audit-secret": owner_secret()},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        body = json.load(resp)
+    if not body.get("ok"):
+        raise SystemExit("Could not issue an owner capture ticket.")
+    print(f"One-use capture ticket for {body['domain']} (expires in 10 minutes):")
+    print(body["captureToken"])
+
+
 def store(cookie_header: str, how: str) -> None:
     domain = _domain()
     # The cookie vault denies the public key writes, so capture routes through the
@@ -79,6 +102,7 @@ def store(cookie_header: str, how: str) -> None:
             "apikey": ANON_KEY,
             "Authorization": f"Bearer {ANON_KEY}",
             "Content-Type": "application/json",
+            "x-audit-secret": owner_secret(),
         },
         method="POST",
     )
@@ -142,7 +166,10 @@ def run_login_mode() -> None:
 
 
 def main() -> None:
-    if "--cookie" in sys.argv:
+    if "--issue-ticket" in sys.argv:
+        issue_ticket()
+    elif "--cookie" in sys.argv:
+        owner_secret()
         run_cookie_mode()
     elif len(sys.argv) > 1 and "@" in sys.argv[1]:
         run_login_mode()
