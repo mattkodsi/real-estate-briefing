@@ -1,0 +1,15 @@
+# Independent frontend review
+
+Reviewed app.js, briefing-core.js, data-client.js, overlay-focus.js, sw.js, index.html and the stylesheet against baseline 2da606e. This report covers code inspection and isolated transport tests; root owns the browser interaction and visual checks.
+
+Findings addressed during integration:
+
+- **P2 — stale Desk and directory render continuations.** renderTrends defined but did not use its ownership check after its initial Promise.all; directory renderers appended an awaited segment bar before checking ownership. A fast navigation to a detail view sharing that container could receive an old index's DOM. Root added the missing post-await checks.
+- **P2 — cap-rate market links used the display group as the market key.** After grouping by market and asset, capRateMarketRow linked to e.g. `New York · Office`, which is not a real market key. Root now builds the link from the observation's underlying market.
+- **P2 — new worker status UI read the wrong field.** Workers publish `state`; the display read `status`, hiding failed/running/completed behind “reported.” Root changed it to state.
+- **P2 — previously cached collections became unreachable on offline upgrade.** The migration retained exact old cache URLs, but new pagination/order parameters produced different URLs. Added a narrow fallback: on network failure or 5xx only, one successful unpaginated legacy public JSON collection with identical origin, table, projection and filters may serve the requested sorted page. It produces a total Content-Range so the real paginated client terminates. It rejects partial pages, ambiguous matches, invalid JSON/non-array bodies, unsupported sorting, mismatching filters or projections, and known incomplete snapshots. Authentication errors and rate limits do not trigger this fallback. The response describes the previously cached snapshot; it does not claim offline data is fresh or recover rows that were never cached.
+- **Hidden big-picture panel.** An explicit display rule could defeat the native hidden attribute on missing-day/error states; root added a hidden override.
+
+Seven service-worker tests pass, including offline and 503 legacy upgrade reads, correct sorting/slicing, real data-client completion, filter/projection isolation, failed cached response rejection, partial-page exclusion, ambiguous snapshot rejection and preservation of authentication/rate-limit failures. The new offline-upgrade test failed with status 0 before implementation. SW syntax passes.
+
+No additional confirmed overlay-focus defect was established by static inspection. Focus return, nested overlays and dynamic replacement still need root's browser checks. The default feed order now follows rank; grouping remains an explicit user choice. The comparisons screen correctly keeps unverified sale references outside medians, though unavailable registry requests still share empty-state presentation with genuinely empty registries (existing behavior, not introduced by this patch).

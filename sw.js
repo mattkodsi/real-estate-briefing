@@ -3,18 +3,19 @@
    caches are dropped and clients can never pair stale code with new data. */
 const VERSION = "v146";
 const SHELL = "shell-" + VERSION;
-const DATA = "data-" + VERSION;
+const DATA = "briefing-public-data-v1";
 
 const SHELL_ASSETS = [
   "./",
   "./index.html",
   "./css/style.css?v=146",
   "./js/app.js?v=146",
+  "./js/data-client.js?v=146",
+  "./js/briefing-core.js?v=146",
+  "./js/overlay-focus.js?v=146",
   "./js/profile-store.js?v=146",
   "./manifest.webmanifest?v=146",
   "./icon.svg",
-  "https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.css",
-  "https://api.mapbox.com/mapbox-gl-js/v3.9.0/mapbox-gl.js",
 ];
 
 self.addEventListener("install", (e) => {
@@ -24,54 +25,114 @@ self.addEventListener("install", (e) => {
 });
 
 self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== SHELL && k !== DATA).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
+  e.waitUntil((async () => {
+    // Import compatible public reads from the previous version before removing it.
+    const cache = await caches.open(DATA);
+    const keys = await caches.keys();
+    for (const name of keys.filter(k => /^data-v\d+$/.test(k))) {
+      const old = await caches.open(name);
+      for (const req of await old.keys()) {
+        if (!publicData(new URL(req.url)) || await cache.match(req)) continue;
+        const res = await old.match(req);
+        if (res?.ok) await cache.put(req, res);
+      }
+      await caches.delete(name);
+    }
+    await Promise.all(keys.filter(k => /^shell-v\d+$/.test(k) && k !== SHELL).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
+
+function publicData(url) {
+  return url.hostname.endsWith('.supabase.co') &&
+    /^\/rest\/v1\/(days|days_light|weeks|players|terms|threads|campaigns|events|metrics|rates_cache|market_pulse|app_config|app_status)$/.test(url.pathname);
+}
+
+// An upgraded paginated query can still use the previous version's complete
+// collection snapshot offline. Never mix queries, projects or partial pages.
+async function legacyCollection(cache, request) {
+  const target = new URL(request.url);
+  if (!target.searchParams.has('limit') || !target.searchParams.has('offset')) return null;
+  const offset = Number(target.searchParams.get('offset')), limit = Number(target.searchParams.get('limit'));
+  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) return null;
+  const orders = (target.searchParams.get('order') || '').split(',').filter(Boolean);
+  if (orders.some(order => !/^[a-zA-Z_][a-zA-Z0-9_]*\.(asc|desc)$/.test(order))) return null;
+  const signature = url => JSON.stringify([...url.searchParams.entries()]
+    .filter(([key]) => !['order','limit','offset'].includes(key))
+    .sort(([ak,av],[bk,bv]) => ak.localeCompare(bk) || av.localeCompare(bv)));
+  const candidates = (await cache.keys()).filter(req => {
+    const url = new URL(req.url);
+    return publicData(url) && url.origin === target.origin && url.pathname === target.pathname &&
+      !url.searchParams.has('limit') && !url.searchParams.has('offset') && signature(url) === signature(target);
+  });
+  if (candidates.length !== 1) return null;
+  const response = await cache.match(candidates[0]);
+  if (!response?.ok) return null;
+  let rows;
+  try { rows = await response.json(); } catch { return null; }
+  if (!Array.isArray(rows)) return null;
+  for (const row of rows) if (!row || typeof row !== 'object' || Array.isArray(row)) return null;
+  const complete = /\/(\d+)$/.exec(response.headers.get('content-range') || '');
+  if (complete && Number(complete[1]) !== rows.length) return null;
+  if (orders.some(order => rows.some(row => !(order.split('.')[0] in row)))) return null;
+  rows.sort((a,b) => {
+    for (const order of orders) {
+      const [field,direction] = order.split('.'), av = a[field], bv = b[field];
+      // Postgres default: ascending NULLS LAST, descending NULLS FIRST.
+      const diff = av === bv ? 0 : av == null ? 1 : bv == null ? -1 : av < bv ? -1 : 1;
+      if (diff) return direction === 'desc' ? -diff : diff;
+    }
+    return 0;
+  });
+  const page = rows.slice(offset, offset + limit);
+  return new Response(JSON.stringify(page), {status:200,headers:{
+    'Content-Type':'application/json',
+    'Content-Range': page.length ? `${offset}-${offset+page.length-1}/${rows.length}` : `*/${rows.length}`,
+  }});
+}
 
 self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-
-  // App launch: network-first, fall back to the cached shell so it opens offline.
   if (req.mode === "navigate") {
-    e.respondWith(fetch(req).catch(() => caches.match("./index.html")));
+    e.respondWith((async () => {
+      try { const res = await fetch(req); if (res.ok) return res; }
+      catch { /* use last installed shell */ }
+      return (await caches.match('./index.html')) || Response.error();
+    })());
     return;
   }
-
-  // Supabase reads (days/weeks/players/terms/rates): network-first, but keep the
-  // last good copy so a previously-opened briefing still reads offline.
-  if (url.hostname.endsWith("supabase.co")) {
-    e.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(DATA).then((c) => c.put(req, copy)).catch(() => {});
+  if (publicData(url)) {
+    const task = (async () => {
+      const cache = await caches.open(DATA);
+      try {
+        const res = await fetch(req);
+        if (res.ok) {
+          try { await cache.put(req, res.clone()); } catch { /* storage full */ }
           return res;
-        })
-        .catch(() => caches.match(req))
-    );
+        }
+        // Authentication and validation errors must remain visible.
+        if (res.status < 500 && res.status !== 429) return res;
+        return (await cache.match(req)) || (res.status >= 500 ? await legacyCollection(cache, req) : null) || res;
+      } catch { return (await cache.match(req)) || (await legacyCollection(cache, req)) || Response.error(); }
+    })();
+    e.respondWith(task);
+    e.waitUntil(task.then(() => {}, () => {}));
     return;
   }
-
-  // Static assets (own + CDN): serve from cache, refresh in the background.
-  e.respondWith(
-    caches.match(req).then((cached) => {
-      const net = fetch(req)
-        .then((res) => {
-          if (res && res.status === 200) {
-            const copy = res.clone();
-            caches.open(SHELL).then((c) => c.put(req, copy)).catch(() => {});
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || net;
-    })
-  );
+  // Private API calls and publisher images are never stored in shell caches.
+  const ownAsset = url.origin === self.location?.origin && /\.(js|css|svg|webmanifest)$/.test(url.pathname);
+  if (!ownAsset) return;
+  const task = (async () => {
+    const cached = await caches.match(req);
+    if (cached) return cached;
+    const res = await fetch(req);
+    if (res.ok) { try { await (await caches.open(SHELL)).put(req, res.clone()); } catch {} }
+    return res;
+  })();
+  e.respondWith(task);
+  e.waitUntil(task.then(() => {}, () => {}));
 });
 
 /* ---------- web push (Phase 4 alerts) ----------
