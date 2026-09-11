@@ -1,5 +1,13 @@
 # CRE Briefing audit improvements — September 11, 2026
 
+## Verified final release
+
+Live version **v148**, app release commit **7acf876**. All eight hosted asset hashes matched. GitHub [regression checks](https://github.com/mattkodsi/real-estate-briefing/actions/runs/34564234755) and [Pages deployment](https://github.com/mattkodsi/real-estate-briefing/actions/runs/34564234312) succeeded. Final release suite: **50 JavaScript/PostgreSQL checks and 34 Python checks**, no skips or failures.
+
+The first live smoke check found a story-label variable-reference error in v147. It was reproduced in a targeted test, corrected, and released as v148. Fresh live checks of the complete 31-story briefing, reader, weekly, canonical dictionary alias, Comps and map reported no browser errors. The reader focused its Back button and used 17px body text. Final 440px-wide live layout placed the first card about 409px from the top, with no horizontal overflow. This is the final evidence, superseding preview-only observations below.
+
+Anonymous ticket issuance and cookie writes are denied in production; accepted public publication remains available. Three day/week revisions were retained after corrections. The owner CLI can now issue a one-use reconnect ticket using its authenticated management login when a private shell credential is absent; five mocked tests cover both authority paths and failures. No actual cookie capture or test push was performed.
+
 ## Release scope
 
 The six-stage plan keeps the static app and its editorial identity. It addresses the audit's integrity, loading, mobile usability, saved-state, notification and factual-error priorities. It does not represent a replacement of the entire ingestion architecture or a certification that all historical AI output is correct.
