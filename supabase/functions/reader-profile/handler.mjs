@@ -10,6 +10,16 @@ function validPref(key,value) {
  if(key==='notifications') return object(value)&&Object.entries(value).every(([k,v])=>['breaking','watch','ready'].includes(k)&&typeof v==='boolean');
  return ({theme:['system','light','dark'],look:['legacy','updated'],textScale:['s','m','l']}[key]||[]).includes(value);
 }
+const setKeys = new Set(['saved','read','learnedTerms','starEvents','watchPlayers']);
+function validMutations(mutations, changes) {
+ return Array.isArray(mutations) && mutations.length <= 100 && mutations.every(m =>
+  object(m) && Object.keys(m).every(k=>['id','sets'].includes(k)) &&
+  /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(m.id || '') &&
+  object(m.sets) && Object.keys(m.sets).length > 0 && Object.entries(m.sets).every(([field,d]) =>
+   setKeys.has(field) && !(field in changes) && object(d) &&
+   Object.keys(d).every(k=>['add','remove'].includes(k)) && validPref(field,d.add) &&
+   Array.isArray(d.remove) && d.remove.every(k=>typeof k==='string')));
+}
 export async function handleProfile(req,rpc) {
  if(req.method==='OPTIONS') return new Response(null,{status:204,headers:cors});
  if(req.method!=='POST') return reply({error:'method_not_allowed'},405);
@@ -21,6 +31,7 @@ export async function handleProfile(req,rpc) {
  if(['create','meta'].includes(b.action) && (typeof b.name!=='string'||!b.name.trim()||b.name.length>80||!/^#[a-f0-9]{6}$/i.test(b.color||''))) return reply({error:'invalid_metadata'},400);
  if('pin' in b && b.pin!==null && !/^\d{4}$/.test(typeof b.pin==='string'?b.pin:'')) return reply({error:'invalid_pin'},400);
  if(b.action==='patch' && (!object(b.changes)||Object.entries(b.changes).some(([k,v])=>!safeKeys.has(k)||!validPref(k,v)))) return reply({error:'invalid_changes'},400);
+ if('mutations' in b && (b.action!=='patch'||!validMutations(b.mutations,b.changes))) return reply({error:'invalid_changes'},400);
  if(b.action==='subscription') {
   try {if(!object(b.sub)||new URL(b.sub.endpoint).protocol!=='https:'||!object(b.sub.keys)||typeof b.sub.keys.p256dh!=='string'||typeof b.sub.keys.auth!=='string'||b.sub.endpoint.length>4096) throw Error();} catch {return reply({error:'invalid_subscription'},400);}
   if('disabled' in b && typeof b.disabled!=='boolean') return reply({error:'invalid_subscription'},400);
