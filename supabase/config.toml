@@ -16,3 +16,6 @@ verify_jwt = false
 verify_jwt = false
 [functions.market-pulse]
 verify_jwt = false
+
+[functions.delivery-receipt]
+verify_jwt = false

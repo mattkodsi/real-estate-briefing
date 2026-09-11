@@ -1384,14 +1384,14 @@ function contentWords(story) {
 }
 
 function readMinutes(story) {
-  const words = contentWords(story);
+  const words = ['partial','missing'].includes(story.contentStatus) ? 0 : contentWords(story);
   return words ? Math.max(1, Math.round(words / 220)) : 0;
 }
 
 /* A card is worth opening only when the article holds meaningfully more text
    than the card already shows (short Traded blurbs are fully visible in place). */
 function isExpandable(story) {
-  return contentWords(story) >= 80;
+  return story.contentStatus === 'ready' || (!story.contentStatus && contentWords(story) >= 80);
 }
 
 function cadenceLabel(story) {
@@ -3811,8 +3811,10 @@ async function getPlayers() {
       if (!r.slug.startsWith("_") && r.data?.name) m.set(r.slug, { slug: r.slug, ...r.data });
     }
   } catch { return m; }
-  state.players = m;
-  return m;
+  const unified = ResearchIdentities.consolidate([...m.values()]);
+  state.playerAliases = unified.aliases;
+  state.players = new Map(unified.entries.map(p => [p.slug, p]));
+  return state.players;
 }
 
 async function getTerms() {
@@ -3825,8 +3827,10 @@ async function getTerms() {
       if (r.data?.term) m.set(r.slug, { slug: r.slug, ...r.data });
     }
   } catch { return m; }
-  state.terms = m;
-  return m;
+  const unified = ResearchIdentities.consolidate([...m.values()]);
+  state.termAliases = {...state.termAliases, ...unified.aliases};
+  state.terms = new Map(unified.entries.map(t => [t.slug, t]));
+  return state.terms;
 }
 
 function daysSince(iso) {
@@ -4141,7 +4145,7 @@ async function renderPlayerProfile(slug) {
   wrap.innerHTML = "";
   const players = await getPlayers();
   if (!isCurrentRender()) return;
-  const p = players.get(slug);
+  const p = players.get(state.playerAliases?.[slug] || slug);
   if (!p) { location.hash = "/players"; return; }
 
   const back = document.createElement("button");
@@ -4230,7 +4234,7 @@ async function renderPlayerProfile(slug) {
     for (const mn of mentions) {
       const btn = document.createElement("button");
       btn.className = "week-story";
-      btn.addEventListener("click", () => { location.hash = `/story/${mn.date}/${mn.id}`; });
+      wireResearchReference(btn, mn);
       const h4 = document.createElement("h4");
       h4.textContent = mn.title;
       const meta = document.createElement("div");
@@ -4245,6 +4249,17 @@ async function renderPlayerProfile(slug) {
     }
     wrap.appendChild(list);
   }
+}
+
+// Preserve an audited historical mention without sending readers to a dead route.
+function wireResearchReference(button, ref, navigate) {
+  if (ref.referenceReview?.status === 'unavailable') {
+    button.disabled = true;
+    button.dataset.sourceUnavailable = 'true';
+    button.title = 'Historical mention retained; its source story is unavailable.';
+    return;
+  }
+  button.addEventListener('click', () => { const route = `/story/${ref.date}/${ref.id}`; if (navigate) navigate(route); else location.hash = route; });
 }
 
 /* ---------- dictionary ---------- */
@@ -4407,7 +4422,7 @@ async function renderTermProfile(slug) {
   const terms = await getTerms();
   if (!isCurrentRender()) return;
   if (state.termAliases?.[slug]) { location.replace('#/term/' + state.termAliases[slug]); return; }
-  const t = terms.get(slug);
+  const t = terms.get(state.termAliases?.[slug] || slug);
   if (!t) { location.hash = "/dictionary"; return; }
 
   const back = document.createElement("button");
@@ -4471,7 +4486,7 @@ async function renderTermProfile(slug) {
     for (const mn of mentions) {
       const btn = document.createElement("button");
       btn.className = "week-story";
-      btn.addEventListener("click", () => { location.hash = `/story/${mn.date}/${mn.id}`; });
+      wireResearchReference(btn, mn);
       const h4 = document.createElement("h4");
       h4.textContent = mn.title;
       const meta = document.createElement("div");
@@ -5127,7 +5142,7 @@ function makeReaderPreview(story, date) {
   hero.hidden = !story.image || isJunkImageUrl(story.image);
   if (!hero.hidden) { img.src = story.image; img.alt = story.title; } else img.removeAttribute('src');
   const body = part('reader-body');
-  if (story.content) { body.innerHTML = sanitizeArticleHtml(story.content); dedupeLeadImage(body,story.image); }
+  if (story.content && isExpandable(story)) { body.innerHTML = sanitizeArticleHtml(story.content); dedupeLeadImage(body,story.image); }
   else { body.textContent = story.summary || ''; }
   // These are beyond the article or resolve asynchronously. Never show the previous story's context.
   for (const id of ['reader-coverage','reader-next','reader-flash','reader-timeleft']) part(id).hidden = true;
@@ -5418,7 +5433,7 @@ async function openReaderRoute(date, id) {
   }
 
   const body = $("reader-body");
-  if (story.content) {
+  if (story.content && isExpandable(story)) {
     body.innerHTML = sanitizeArticleHtml(story.content);
     dedupeLeadImage(body, story.image);
   } else {
@@ -5912,7 +5927,7 @@ function openStoryPeek(date, id, originRect) {
 
 async function openPlayerSheet(slug, originRect) {
   const players = await getPlayers();
-  const p = players.get(slug);
+  const p = players.get(state.playerAliases?.[slug] || slug);
   if (!p) { location.hash = `/player/${slug}`; return; }
   // fling-up-to-open works whether the sheet was HELD (peek, grows from the card)
   // or TAPPED (plain sheet) — either way a swipe up opens the full page
@@ -5980,7 +5995,7 @@ async function openPlayerSheet(slug, originRect) {
         t.className = "sm-title";
         t.textContent = m.title;
         row.append(d, t);
-        row.addEventListener("click", () => sheetGo(`/story/${m.date}/${m.id}`));
+        wireResearchReference(row, m, sheetGo);
         card.appendChild(row);
       }
     }
@@ -5995,7 +6010,7 @@ async function openPlayerSheet(slug, originRect) {
 
 async function openTermSheet(slug, originRect) {
   const terms = await getTerms();
-  const t = terms.get(slug);
+  const t = terms.get(state.termAliases?.[slug] || slug);
   if (!t) { location.hash = `/term/${slug}`; return; }
   const flingTerm = () => sheetFlingTo(`/term/${slug}`);
   const peekOpts = originRect ? { peek: true, originRect, onFling: flingTerm } : { onFling: flingTerm };
@@ -6085,7 +6100,7 @@ async function openThreadPeek(slug, originRect) {
         tt.className = "sm-title";
         tt.textContent = m.delta || m.title;
         row.append(d, tt);
-        row.addEventListener("click", () => sheetGo(`/story/${m.date}/${m.id}`));
+        wireResearchReference(row, m, sheetGo);
         card.appendChild(row);
       }
     }
@@ -7100,7 +7115,7 @@ function renderTermOfDay(wrap, all) {
       const seen = document.createElement("button");
       seen.className = "totd-seen";
       seen.textContent = `Seen ${formatDate(mn.date, { month: "short", day: "numeric" })}: ${mn.title}`;
-      seen.addEventListener("click", () => { location.hash = `/story/${mn.date}/${mn.id}`; });
+      wireResearchReference(seen, mn);
       card.appendChild(seen);
     }
   });
@@ -7498,7 +7513,7 @@ function ageMin(iso) {
 
 function missingContent(day) {
   return (day?.stories || []).filter((s) =>
-    s.url && contentWords(s) < 120 && !s.sourceBlocked);
+    !isExpandable(s));
 }
 
 async function paintHealthDot(day) {
@@ -7507,7 +7522,7 @@ async function paintHealthDot(day) {
   const hb = await readHeartbeatRow();
   const age = ageMin(hb?.lastRun);
   const missing = missingContent(day).length;
-  const cls = age > 180 ? "bad" : (age > 90 || missing ? "warn" : "ok");
+  const cls = hb?.state === "failed" || age > 180 ? "bad" : (age > 90 || missing ? "warn" : "ok");
   dot.className = "health-dot " + cls;
 }
 
@@ -7802,7 +7817,7 @@ function threadTimelineEl(t) {
   for (const e of entries) {
     const row = document.createElement("button");
     row.className = "timeline-row";
-    row.addEventListener("click", () => { location.hash = `/story/${e.date}/${e.id}`; });
+    wireResearchReference(row, e);
     const dot = document.createElement("div");
     dot.className = "tl-dot";
     const body = document.createElement("div");
@@ -7971,7 +7986,7 @@ function canopyBodyEl(c, threadMap) {
     for (const e of entries) {
       const row = document.createElement("button");
       row.className = "leaf-row";
-      row.addEventListener("click", () => { location.hash = `/story/${e.date}/${e.id}`; });
+      wireResearchReference(row, e);
       const dt = document.createElement("div");
       dt.className = "leaf-date";
       dt.textContent = formatDate(e.date, { month: "short", day: "numeric" });
@@ -8447,7 +8462,7 @@ async function renderStatus() {
   if (workers.length) {
     const workerCard = statusCard('Processing activity');
     for (const worker of workers) statusRow(workerCard, worker.data?.via || worker.id, `${fmtAge(ageMin(worker.data?.lastRun))} · ${worker.data?.state || 'reported'}`);
-    statusBlock(workerCard, 'Timing', 'Article enrichment timestamps are recorded from this release. Email arrival times are not yet available for a complete delivery-time measurement.');
+    statusBlock(workerCard, 'Timing', 'Publication and content checks are timed separately. Supported devices can acknowledge notification receipt and display; these do not prove it was read. Email timing requires linked mailbox metadata.');
     wrap.appendChild(workerCard);
   }
   const contentCard = statusCard("Article content");
@@ -8455,11 +8470,11 @@ async function renderStatus() {
     const withUrl = (day.stories || []).filter((s) => s.url);
     const missing = missingContent(day);
     const blocked = (day.stories || []).filter((s) => s.sourceBlocked);
-    statusRow(contentCard, "Full text in-app",
-      `${withUrl.filter(s => contentWords(s) >= 120).length} of ${withUrl.length}`,
+    statusRow(contentCard, "Reader text available",
+      `${day.stories.filter(isExpandable).length} of ${day.stories.length}`,
       missing.length ? "warn" : "ok");
-    for (const s of missing) statusRow(contentCard, s.id, "waiting on the fill loop", "warn");
-    for (const s of blocked) statusRow(contentCard, s.id, "reads at source (unfetchable)");
+    for (const s of missing) statusRow(contentCard, s.title || s.id,
+      !s.url ? "source link unavailable" : s.fillError === 'subscriber_gate' ? "subscriber access required" : s.sourceBlocked ? "source could not be retrieved" : "reader text pending", "warn");
   }
   wrap.appendChild(contentCard);
 
@@ -8712,14 +8727,17 @@ async function disableAlerts() {
 
 /* following — watched players live in the profile's prefs */
 function watchedPlayers() { return pref("watchPlayers", []); }
-function isWatched(slug) { return watchedPlayers().includes(slug); }
+function identitySlugs(slug) {
+  const canonical = state.playerAliases?.[slug] || slug;
+  return state.players?.get(canonical)?.identitySlugs || [slug];
+}
+function isWatched(slug) { return identitySlugs(slug).some(s => watchedPlayers().includes(s)); }
 function toggleWatch(slug) {
-  const list = [...watchedPlayers()];
-  const i = list.indexOf(slug);
-  if (i >= 0) list.splice(i, 1);
-  else list.push(slug);
-  setPref("watchPlayers", list);
-  return i < 0;
+  const group = identitySlugs(slug), active = isWatched(slug);
+  const list = watchedPlayers().filter(s => !group.includes(s));
+  if (!active) list.push(...group);
+  setPref("watchPlayers", [...new Set(list)]);
+  return !active;
 }
 
 function watchStar(slug, name) {
@@ -8852,14 +8870,16 @@ async function renderAlerts() {
 
   // following
   const folCard = statusCard("Following");
-  const watched = watchedPlayers();
+  await getPlayers();
+  if (!isCurrentRender()) return;
+  const watched = [...new Set(watchedPlayers().map(s => state.playerAliases?.[s] || s))];
   if (watched.length) {
     const players = await getPlayers();
   if (!isCurrentRender()) return;
     const list = document.createElement("div");
     list.className = "follow-list";
     for (const slug of watched) {
-      const p = players.get(slug);
+      const p = players.get(state.playerAliases?.[slug] || slug);
       const chipEl = document.createElement("button");
       chipEl.className = "follow-chip";
       const nm = document.createElement("span");

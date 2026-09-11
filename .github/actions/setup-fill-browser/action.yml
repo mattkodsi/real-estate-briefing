@@ -1,0 +1,25 @@
+name: Set up article browser
+description: Install and exercise the exact Python and browser runtime used by the filler.
+outputs:
+  python-path:
+    description: Absolute path of the interpreter containing Playwright
+    value: ${{ steps.python.outputs.python-path }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      id: python
+      with:
+        python-version: '3.12'
+    - name: Install browser runtime
+      shell: bash
+      env:
+        FILL_PYTHON: ${{ steps.python.outputs.python-path }}
+      run: |
+        "$FILL_PYTHON" -m pip install playwright==1.49.1
+        "$FILL_PYTHON" -m playwright install --with-deps chromium
+    - name: Exercise Chromium startup and rendering
+      shell: bash
+      env:
+        FILL_PYTHON: ${{ steps.python.outputs.python-path }}
+      run: '"$FILL_PYTHON" scripts/smoke_fill_browser.py'

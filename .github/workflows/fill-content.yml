@@ -23,25 +23,37 @@ concurrency:
 jobs:
   fill:
     runs-on: ubuntu-latest
-    container: mcr.microsoft.com/playwright/python:v1.49.1-noble
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Playwright
-        run: pip install playwright==1.49.1
+      - uses: ./.github/actions/setup-fill-browser
+        id: browser
 
       - name: Fill missing content
         env:
+          FILL_PYTHON: ${{ steps.browser.outputs.python-path }}
           FILL_DATE: ${{ inputs.date }}
           AUDIT_PIPELINE_SECRET: ${{ secrets.AUDIT_PIPELINE_SECRET }}
         run: |
           if [ -n "$FILL_DATE" ]; then
-            python scripts/fill_browser.py "$FILL_DATE"
+            "$FILL_PYTHON" scripts/fill_browser.py "$FILL_DATE"
           else
-            python scripts/fill_browser.py
+            "$FILL_PYTHON" scripts/fill_browser.py
           fi
+
+      - name: Record failed worker when setup or execution fails
+        if: failure()
+        env:
+          FILL_PYTHON: ${{ steps.browser.outputs.python-path }}
+          FILL_DATE: ${{ inputs.date }}
+        run: |
+          # The heartbeat client uses only the standard library. If setup itself
+          # failed, the runner's system interpreter can still report the outage.
+          "${FILL_PYTHON:-/usr/bin/python3}" - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, "scripts")
+          import fill_content
+          fill_content.record_heartbeat(os.environ.get("FILL_DATE") or fill_content._today(), 0, 1, "github-actions", state="failed")
+          PY

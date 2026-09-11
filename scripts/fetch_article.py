@@ -8,6 +8,7 @@ The extractor keeps only p/h2/h3/blockquote/ul/ol/li/img/figure/figcaption from 
 main article container and strips attributes except img src/alt. Used by the daily
 scheduled task to populate each story's "content" field for the in-app reader.
 """
+from content_quality import assess_content, GATE, text_of
 import json
 import os
 import re
@@ -244,7 +245,7 @@ def _looks_blocked(html: str) -> bool:
     low = html[:4000].lower()
     return "just a moment" in low or \
            ("attention required" in low and "cloudflare" in low) or \
-           ("enable javascript and cookies to continue" in low) or len(html) < 1200
+           ("enable javascript and cookies to continue" in low)
 
 
 def _fetch_direct(url: str) -> tuple[str, str]:
@@ -312,9 +313,9 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
     # junk filter matches (0 words despite a real article), retry dropping by
     # tag only — _strip_nav_clutter still trims the edges
     p, body, words = run(True)
-    if words < 120:
+    if not assess_content(body)["ready"]:
         p2, body2, words2 = run(False)
-        if words2 >= 120:
+        if assess_content(body2)["ready"]:
             p, body, words = p2, body2, words2
     # hero image: prefer the social-card meta (og:image), then twitter:image /
     # link[image_src], then the first real in-article image as a last resort — so a
@@ -325,8 +326,17 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
             if cand and cand.startswith("http") and not JUNK_IMG.search(cand):
                 return cand
         return None
+    quality = assess_content(body)
+    # A class-filtered gate can disappear while leaving a long teaser. Inspect
+    # the article-scope text before trimming to avoid certifying that teaser.
+    gate_parser = ArticleExtractor(scope_to_article=has_article_tag, junk_classes=False)
+    gate_parser.feed(html)
+    if words < 300 and GATE.search(text_of("".join(gate_parser.out))):
+        quality.update(ready=False, status="partial", reason="subscriber_gate")
     out = {
-        "ok": words > 120,
+        "ok": quality["ready"] and not blocked,
+        "contentStatus": quality["status"],
+        "qualityReason": quality["reason"],
         "title": p.title,
         "image": _pick_image(p),
         "html": body.strip(),
@@ -342,9 +352,8 @@ def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict
     # server-side; NO session cookie unlocks them, so don't blame the session.
     elif is_trd and "/data/" in (final_url or url) and not out["ok"]:
         out["premiumData"] = True
-    # a short result on a regular TRD article usually means the session cookie is
-    # missing/expired — surface it so the pipeline can flag it in the day's notes
-    elif is_trd and not out["ok"]:
+    # Only explicit subscriber-gate evidence suggests a session problem.
+    elif not out["ok"] and quality["reason"] == "subscriber_gate":
         out["paywalled"] = True
     # distinguish "hit a bot wall" (transient, worth retrying) from a genuinely
     # empty/short article, so callers report it honestly instead of "0 words"
@@ -362,7 +371,7 @@ def is_fabricated_bisnow_shortlink(url: str) -> bool:
     real source. (Real ids are lowercase hex; anything with letters g–z or a hyphen
     is invented.)"""
     try:
-        p = urllib.parse.urlparse(url)
+        p = urllib.parse.urlparse(url if isinstance(url, str) else "")
     except Exception:
         return False
     if not p.netloc.lower().endswith("bisnow.io"):

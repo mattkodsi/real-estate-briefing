@@ -33,6 +33,7 @@ import urllib.request
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from content_quality import assess_content
 import fetch_article  # same directory; provides extract(url) -> {ok, html, image, words, [paywalled]}
 
 SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co"
@@ -60,7 +61,7 @@ def _words(html: str | None) -> int:
 
 def _host(url: str) -> str:
     try:
-        return urllib.parse.urlparse(url).netloc.lower()
+        return urllib.parse.urlparse(url if isinstance(url, str) else "").netloc.lower()
     except Exception:
         return ""
 
@@ -197,12 +198,22 @@ def load_day(date: str, no_push: bool = False):
 
 
 def needs_enrichment(story):
-    return bool(story.get("url")) and (
-        _words(story.get("content")) < MIN_WORDS
+    return bool(story.get("url") or any(c.get("url") for c in (story.get("coverage") or []) if isinstance(c, dict))) and (
+        not assess_content(story.get("content"))["ready"]
         or (not story.get("image") and not story.get("imageChecked")))
 
 
-def _try_story(s: dict) -> tuple[str, object]:
+def stamp_content_status(story, error=None):
+    quality = assess_content(story.get("content"))
+    story["contentStatus"] = quality["status"]
+    if quality["ready"]:
+        story.pop("fillError", None)
+    else:
+        story.pop("contentReadyAt", None)
+        story["fillError"] = error or quality["reason"]
+
+
+def _try_primary(s: dict) -> tuple[str, object]:
     """Attempt to fill one story's content. Mutates it on success.
     Returns (status, detail) where status is 'filled'|'paywalled'|'failed'."""
     have = _words(s.get("content"))
@@ -224,7 +235,7 @@ def _try_story(s: dict) -> tuple[str, object]:
         s["url"] = _clean_url(final)
     if res.get("ok"):
         mism = fetch_article.title_mismatch(s.get("title", ""), res)
-        improved = _words(res.get("html")) > have
+        improved = not assess_content(s.get("content"))["ready"] or _words(res.get("html")) > have
         # guard against a mis-paired link: if the headline shares no distinctive
         # name with the fetched article, the url pointed at the wrong story —
         # don't attach that content (or its image) under this headline
@@ -258,6 +269,47 @@ def _try_story(s: dict) -> tuple[str, object]:
     return "failed", f"only {res.get('words', 0)} words"
 
 
+def _try_coverage(s: dict) -> bool:
+    """Recover from an already verified coverage link, preserving source attribution."""
+    if assess_content(s.get("content"))["ready"]:
+        return False
+    for entry in list(s.get("coverage") or []):
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url")
+        if not url or url == s.get("url") or _host(url) == "" or not url.startswith(("https://", "http://")):
+            continue
+        try:
+            result = fetch_article.extract(url)
+        except Exception:
+            continue
+        if not result.get("ok") or not assess_content(result.get("html"))["ready"] or fetch_article.title_mismatch(s.get("title", ""), result):
+            continue
+        old = {"publisher": s.get("publisher") or _host(s.get("url", "")), "url": s.get("url"),
+               "title": s.get("title"), "content": s.get("content"), "note": None}
+        final = result.get("finalUrl") or url
+        remaining = [c for c in (s.get("coverage") or []) if isinstance(c, dict) and c is not entry]
+        if old["url"] and not any(c.get("url") == old["url"] for c in remaining):
+            remaining.append(old)
+        s["coverage"] = remaining
+        s["url"] = _clean_url(final)
+        s["publisher"] = entry.get("publisher") or _host(final)
+        s["content"] = result["html"]
+        # An alternate outlet's article image must remain credited to that outlet.
+        s["image"] = result.get("image")
+        s.pop("sourceBlocked", None)
+        s.pop("imageChecked", None)
+        return True
+    return False
+
+
+def _try_story(s: dict) -> tuple[str, object]:
+    result = _try_primary(s) if s.get("url") else ("failed", "missing_source_url")
+    if result[0] not in ("filled", "imageonly", "nochange") and _try_coverage(s):
+        return "filled", _words(s.get("content"))
+    return result
+
+
 def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_seconds: float = 600) -> dict:
     """Fetch content for every story that still needs it. Mutates `day` in place.
 
@@ -276,9 +328,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_secon
     # is still missing a hero IMAGE and hasn't already been checked — a story that
     # arrived text-complete from the email body (CRE Daily often does) would
     # otherwise never be revisited to grab its og:image.
-    to_fetch = [s for s in stories if s.get("url") and (
-        _words(s.get("content")) < MIN_WORDS
-        or (not s.get("image") and not s.get("imageChecked")))]
+    to_fetch = [s for s in stories if needs_enrichment(s)]
     to_fetch.sort(key=lambda s: s.get("fillAttemptedAt") or "")
     skipped = len(stories) - len(to_fetch)
     filled, paywalled, dropped = [], [], []
@@ -296,6 +346,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_secon
             attempted_ids.add(sid)
             s["fillAttemptedAt"] = publication.utcnow()
             status, detail = _try_story(s)
+            stamp_content_status(s, None if status in ("filled", "imageonly", "nochange") else status)
             if status == "filled":
                 filled.append(sid)
                 unresolved.pop(sid, None)
@@ -357,7 +408,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_secon
     for s in to_fetch:
         if s.get("id") not in attempted_ids:
             continue
-        if _words(s.get("content")) >= 80:
+        if assess_content(s.get("content"))["ready"]:
             s.pop("sourceBlocked", None)
         elif s.get("id") in blocked_ids:
             s["sourceBlocked"] = True

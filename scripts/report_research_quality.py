@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import unicodedata
 from check_quality import check_document
+from reference_repair import reviewed_unavailable
 
 TABLES = ('players', 'terms', 'threads', 'campaigns', 'events', 'metrics')
 
@@ -34,6 +35,7 @@ def build_report(days, registries):
     day_ids = {day['date']: {s.get('id') for s in day.get('stories', []) if isinstance(s, dict)} for day in days}
     candidates, refs, repeated, registry_refs, findings = [], [], [], [], []
     resolved_aliases = []
+    reviewed_refs, reviewed_identities, relationships = [], [], []
     terms = registries.get('terms', {})
     for key, entry in terms.items():
         if not isinstance(entry, dict) or not entry.get('aliasOf'):
@@ -102,6 +104,9 @@ def build_report(days, registries):
                             reason = 'day_not_exported'
                         elif identity not in day_ids[date]:
                             reason = 'story_absent'
+                    if reason and reviewed_unavailable(ref):
+                        reviewed_refs.append(dict(table=table, key=key, location=f'{field}[{i}]', date=date, story_id=identity, reason=reason, review=ref['referenceReview']))
+                        reason = None
                     if reason:
                         refs.append(dict(table=table, key=key, location=f'{field}[{i}]', date=date if isinstance(date, str) else None, story_id=identity if isinstance(identity, str) else None, reason=reason))
             repeated.extend(dict(table=table, key=key, date=date, story_id=identity, count=count)
@@ -121,10 +126,42 @@ def build_report(days, registries):
                 registry_refs.append(dict(table='days', key=day['date'], location=f'stories[{i}]', target_table='threads', target_key=target, reason='target_absent' if 'threads' in registries else 'registry_not_exported'))
     # A pair sharing both a primary name and alias is still one candidate group.
     candidates = list({(c['table'], tuple(c['keys'])): c for c in candidates}.values())
+    pending = []
+    for candidate in candidates:
+        table, keys = candidate['table'], candidate['keys']
+        entries = registries[table]
+        types = {entries[k].get('type') for k in keys} if table == 'players' else set()
+        reviews = [review for k in keys for review in entries[k].get('researchReviews', [])
+                   if isinstance(review, dict) and sorted(review.get('keys', [])) == keys
+                   and review.get('decision') in ('same_entity', 'distinct_related')
+                   and review.get('evidence') and review.get('reviewedAt')]
+        if reviews:
+            reviewed_identities.append({**candidate, 'status': 'reviewed', 'review': reviews[0]})
+        elif len(types) > 1 and None not in types:
+            relationships.append({**candidate, 'status': 'related_identity_types', 'types': sorted(types)})
+        else:
+            pending.append(candidate)
+    # Reviewed relationships remain visible even after misleading aliases are removed.
+    recorded = {(c['table'], tuple(c['keys'])) for c in reviewed_identities}
+    for table, entries in registries.items():
+        for entry in entries.values():
+            if not isinstance(entry, dict):
+                continue
+            for review in entry.get('researchReviews', []):
+                if not isinstance(review, dict) or review.get('decision') not in ('same_entity', 'distinct_related') or not review.get('evidence') or not review.get('reviewedAt'):
+                    continue
+                keys = review.get('keys', [])
+                if not isinstance(keys, list) or len(keys) < 2 or not all(isinstance(k, str) and k in entries for k in keys):
+                    continue
+                sig = (table, tuple(sorted(keys)))
+                if sig not in recorded:
+                    reviewed_identities.append(dict(table=table, keys=sorted(keys), status='reviewed', review=review))
+                    recorded.add(sig)
+    candidates = pending
     return dict(day_count=len(days), story_count=sum(len(d.get('stories', [])) for d in days),
                 date_range=[min(day_ids), max(day_ids)] if day_ids else [],
                 registry_counts={name: len(entries) for name, entries in registries.items()},
-                duplicate_candidates=candidates, resolved_aliases=resolved_aliases, reference_counts=dict(reference_counts),
+                duplicate_candidates=candidates, reviewed_identity_decisions=reviewed_identities, identity_relationships=relationships, reviewed_unavailable_references=reviewed_refs, reference_issue_counts={"unreviewed": len(refs), "reviewed_unavailable": len(reviewed_refs), "total_unresolved": len(refs) + len(reviewed_refs)}, resolved_aliases=resolved_aliases, reference_counts=dict(reference_counts),
                 reference_findings=refs, repeated_references=repeated, registry_reference_findings=registry_refs,
                 quality_counts=dict(sorted(Counter(f['code'] for f in findings).items())), quality_findings=findings)
 

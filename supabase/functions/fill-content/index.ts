@@ -15,6 +15,7 @@
 //
 // GET/POST ?date=YYYY-MM-DD (default today ET) &force=1 (skip standby check)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { assessContent } from "../_shared/content-quality.mjs";
 import { readPrimaryHeartbeat } from "../_shared/fill-heartbeat.mjs";
 import { safeFetch } from "../_shared/audit-fetch.mjs";
 import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
@@ -40,7 +41,7 @@ function looksBlocked(html: string): boolean {
   const low = html.slice(0, 4000).toLowerCase();
   return low.includes("just a moment") ||
     (low.includes("attention required") && low.includes("cloudflare")) ||
-    low.includes("enable javascript and cookies to continue") || html.length < 1200;
+    low.includes("enable javascript and cookies to continue");
 }
 
 function goodImg(el: Element): string | null {
@@ -103,16 +104,17 @@ function extractPass(doc: Document, junkClasses: boolean): { html: string; words
   return { html, words: sliced.reduce((s, b) => s + b.words, 0) };
 }
 
-function extract(html: string): { ok: boolean; html: string; words: number; image: string | null; blocked: boolean } {
+function extract(html: string): { ok: boolean; html: string; words: number; image: string | null; blocked: boolean; reason: string | null } {
   const blocked = looksBlocked(html);
   const { document: doc } = parseHTML(html);
   let res = extractPass(doc, true);
-  if (res.words < MIN_WORDS) {
+  if (!assessContent(res.html).ready) {
     const relaxed = extractPass(doc, false); // page-builder wrapped body in a junk-matching class
-    if (relaxed.words >= MIN_WORDS) res = relaxed;
+    if (assessContent(relaxed.html).ready) res = relaxed;
   }
+  const gate = res.words < 300 && assessContent(extractPass(doc, false).html).reason === "subscriber_gate";
   const image = doc.querySelector('meta[property="og:image"]')?.getAttribute("content") || null;
-  return { ok: res.words >= MIN_WORDS, html: res.html, words: res.words, image, blocked };
+  return { ok: !blocked && !gate && assessContent(res.html).ready, html: res.html, words: res.words, image, blocked, reason: blocked ? "bot_wall" : gate ? "subscriber_gate" : assessContent(res.html).reason };
 }
 
 async function sb(path: string, init: RequestInit = {}): Promise<Response> {
@@ -188,7 +190,7 @@ Deno.serve(async (req: Request) => {
   const expected = structuredClone(day);
   const stories: Record<string, unknown>[] = day.stories || [];
   const wordsIn = (h: unknown) => wordsOf(String(h || "").replace(/<[^>]+>/g, " "));
-  const candidates = stories.filter((s) => wordsIn(s.content) < MIN_WORDS && s.url);
+  const candidates = stories.filter((s) => !assessContent(s.content).ready && s.url);
   const claims = await rpc("audit_claim_fill", {p_day:date,p_candidates:candidates,p_limit:BATCH});
   const targets = claims.map((c: {story_id:string;source_url:string}) => candidates.find(s => String(s.id) === c.story_id && s.url === c.source_url)).filter(Boolean);
   if (!targets.length) {
@@ -197,23 +199,26 @@ Deno.serve(async (req: Request) => {
 
   const filled: string[] = [], failed: string[] = [];
   for (const s of targets) {
+    s.fillAttemptedAt = new Date().toISOString();
+    let fetchError: string | null = null;
     try {
       const u = new URL(String(s.url));
       const res = await safeFetch(u.href, {cookie: await sessionCookie(u.hostname)});
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = res.html;
       const out = extract(html);
+      fetchError = out.reason;
       if (res.finalUrl && isWrapper(String(s.url)) && !isWrapper(res.finalUrl)) {
         const f = new URL(res.finalUrl);
         s.url = `${f.protocol}//${f.host}${f.pathname}`; // canonical publisher URL
       }
-      if (out.ok && out.words > wordsIn(s.content)) {
+      if (out.ok && (!assessContent(s.content).ready || out.words > wordsIn(s.content))) {
         const stamp = new Date().toISOString();
-        const wasReady = wordsIn(s.content) >= MIN_WORDS;
+        const wasReady = assessContent(s.content).ready;
         s.content = out.html;
         s.enrichedAt = stamp;
         s.enrichedBy = "supabase-edge";
-        if (!wasReady && wordsIn(s.content) >= MIN_WORDS) s.contentReadyAt = stamp;
+        if (!wasReady && assessContent(s.content).ready) s.contentReadyAt = stamp;
         if (!s.image && out.image) s.image = out.image;
         delete s.sourceBlocked;
         filled.push(String(s.id));
@@ -221,17 +226,22 @@ Deno.serve(async (req: Request) => {
         failed.push(String(s.id));
       }
     } catch {
+      fetchError = "fetch_failed";
       failed.push(String(s.id));
     }
+    const quality = assessContent(s.content);
+    s.contentStatus = quality.status;
+    if (quality.ready) delete s.fillError;
+    else { delete s.contentReadyAt; s.fillError = fetchError || quality.reason || "fetch_failed"; }
   }
 
-  if (filled.length) {
+  if (targets.length) {
     day.generatedAt = new Date().toISOString();
     day.publishedAt = day.generatedAt;
     const published = await rpc("audit_publish_fill", {p_day:date,p_expected:expected,p_data:day});
     if (!published) return new Response(JSON.stringify({ok:true,date,conflict:true,filled:[],failed}),{headers:HEADERS});
     // pulse ONLY on progress — a no-op standby must not mask a dead primary
-    await sb("secrets", { method: "POST", body: JSON.stringify({ id: "fill_heartbeat", data: {
+    if (filled.length) await sb("secrets", { method: "POST", body: JSON.stringify({ id: "fill_heartbeat", data: {
       lastRun: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
       date, filled: filled.length, failed: failed.length, via: "supabase-edge",
     } }) });

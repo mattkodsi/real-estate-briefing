@@ -121,9 +121,16 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
             break
         sid = s.get("id")
         s["fillAttemptedAt"] = publication.utcnow()
+        if not s.get("url"):
+            if fill_content._try_coverage(s):
+                filled.append(sid)
+                print(f"  ✓ {sid:<40} recovered from alternate coverage")
+            else:
+                failed.append((sid, "missing_source_url"))
+            continue
         # a fabricated Bisnow short-link (descriptive slug) 404s forever — drop the
         # dead url so the app shows summary-only instead of linking to a 404
-        if fetch_article.is_fabricated_bisnow_shortlink(s.get("url", "")):
+        if fetch_article.is_fabricated_bisnow_shortlink(s.get("url") or ""):
             s.pop("url", None)
             s.pop("sourceBlocked", None)
             changed_urls += 1
@@ -150,7 +157,7 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
                 if not s.get("image") and res.get("image"):
                     s["image"] = res["image"]
                     got_image = True
-                if res["words"] > have:
+                if not fill_content.assess_content(s.get("content"))["ready"] or res["words"] > have:
                     s["content"] = res["html"]
                     s.pop("sourceBlocked", None)
                     filled.append(sid)
@@ -176,7 +183,7 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
                 s["sourceBlocked"] = True
                 failed.append((sid, "TRD Data (premium tier)"))
                 print(f"  ⤫ {sid:<40} TRD Data (premium tier)")
-            elif have >= fill_content.MIN_WORDS:
+            elif fill_content.assess_content(s.get("content"))["ready"]:
                 # here only for a missing image and the fetch missed (bot wall / error):
                 # the story's text is fine — never flag it blocked, just retry next run
                 print(f"  · {sid:<40} image fetch missed (text intact)")
@@ -192,7 +199,7 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
                 except Exception:  # noqa: BLE001
                     alt = None
                 if (alt and alt.get("ok")
-                        and fill_content._words(alt.get("html")) > have
+                        and (not fill_content.assess_content(s.get("content"))["ready"] or fill_content._words(alt.get("html")) > have)
                         and not fetch_article.title_mismatch(s.get("title", ""), alt)):
                     s["content"] = alt["html"]
                     if not s.get("image") and alt.get("image"):
@@ -208,6 +215,15 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
         except Exception as e:  # noqa: BLE001 - one bad page never stops the loop
             failed.append((sid, str(e)[:70]))
             print(f"  ✗ {sid:<40} {str(e)[:70]}")
+
+        if not fill_content.assess_content(s.get("content"))["ready"] and fill_content._try_coverage(s):
+            failed = [item for item in failed if item[0] != sid]
+            filled.append(sid)
+            print(f"  ✓ {sid:<40} recovered from alternate coverage")
+
+    for story in targets:
+        if story.get("fillAttemptedAt") != next((old.get("fillAttemptedAt") for old in base.get("stories", []) if old.get("id") == story.get("id")), None):
+            fill_content.stamp_content_status(story, "fetch_failed" if any(item[0] == story.get("id") for item in failed) else None)
 
     # Persist status/image-check-only changes too. Failure propagates to the
     # caller, which records it and keeps processing independent days.
@@ -236,51 +252,62 @@ def main() -> int:
     if not no_push:
         fill_content.record_heartbeat(dates[0], 0, 0, worker, state="started")
 
-    # cheap pre-check: if NOTHING across the window needs content, skip launching
-    # a browser entirely (the common steady-state — keeps no-op runs seconds long)
-    any_targets = False
-    day_priority = {}
-    for date in dates:
-        day, _ = fill_content.load_day(date, no_push)
-        targets = [s for s in (day or {}).get("stories", []) if fill_content.needs_enrichment(s)]
-        if targets:
-            any_targets = True
-            day_priority[date] = min(s.get("fillAttemptedAt") or "" for s in targets)
-    # Oldest unattempted work across dates gets a turn even on heavy news days.
-    dates.sort(key=lambda date: (day_priority.get(date, "~"), date))
-    if not any_targets:
-        print(f"SUMMARY: nothing to fill across {len(dates)} day(s)")
-        if not no_push:
-            fill_content.record_heartbeat(dates[0], 0, 0, worker)
-        return 0
-
-    from playwright.sync_api import sync_playwright  # imported late: no-op runs skip it
-
-    deadline = time.monotonic() + 600
     total_filled = total_failed = publication_failures = 0
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        ctx = browser.new_context(user_agent=UA, locale="en-US",
-                                  viewport={"width": 1280, "height": 900})
-        cookied: set = set()
-        page = ctx.new_page()
+    try:
+        # cheap pre-check: if NOTHING across the window needs content, skip launching
+        # a browser entirely (the common steady-state — keeps no-op runs seconds long)
+        any_targets = False
+        day_priority = {}
         for date in dates:
-            if time.monotonic() >= deadline:
-                print("Runtime budget reached; remaining dates deferred")
-                break
-            try:
-                f, x = _fill_one_day(page, ctx, cookied, date, no_push, deadline)
-                total_filled += f
-                total_failed += x
-            except Exception as exc:
-                publication_failures += 1
-                print(f"ERROR processing {date}: {exc}")
+            day, _ = fill_content.load_day(date, no_push)
+            targets = [s for s in (day or {}).get("stories", []) if fill_content.needs_enrichment(s)]
+            if targets:
+                any_targets = True
+                day_priority[date] = min(s.get("fillAttemptedAt") or "" for s in targets)
+        # Oldest unattempted work across dates gets a turn even on heavy news days.
+        dates.sort(key=lambda date: (day_priority.get(date, "~"), date))
+        if not any_targets:
+            print(f"SUMMARY: nothing to fill across {len(dates)} day(s)")
             if not no_push:
-                fill_content.record_heartbeat(date, total_filled, total_failed, worker, state="running")
-        browser.close()
+                fill_content.record_heartbeat(dates[0], 0, 0, worker)
+            return 0
+
+        from playwright.sync_api import sync_playwright  # imported late: no-op runs skip it
+
+        deadline = time.monotonic() + 600
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context(user_agent=UA, locale="en-US",
+                                      viewport={"width": 1280, "height": 900})
+            cookied: set = set()
+            page = ctx.new_page()
+            for date in dates:
+                if time.monotonic() >= deadline:
+                    print("Runtime budget reached; remaining dates deferred")
+                    break
+                try:
+                    f, x = _fill_one_day(page, ctx, cookied, date, no_push, deadline)
+                    total_filled += f
+                    total_failed += x
+                except Exception as exc:
+                    publication_failures += 1
+                    print(f"ERROR processing {date}: {exc}")
+                if not no_push:
+                    fill_content.record_heartbeat(date, total_filled, total_failed, worker, state="running")
+            browser.close()
+
+    except Exception as exc:
+        # Imports, browser launch, context setup, loading, and shutdown all belong
+        # to the worker lifecycle. A crashed primary must release failover now.
+        if not no_push:
+            fill_content.record_heartbeat(dates[0], total_filled,
+                                          total_failed + publication_failures + 1,
+                                          worker, state="failed")
+        print(f"ERROR fill worker failed: {exc}")
+        return 1
 
     if not no_push:
-        fill_content.record_heartbeat(dates[0], total_filled, total_failed, worker,
+        fill_content.record_heartbeat(dates[0], total_filled, total_failed + publication_failures, worker,
                                       state="failed" if publication_failures else "completed")
     print(f"SUMMARY: filled {total_filled}, {total_failed} still missing across {len(dates)} day(s)")
 

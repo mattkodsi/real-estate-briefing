@@ -27,3 +27,16 @@ export async function checkedFetch(url, init={}, fetcher=fetch) {
  if(!response.ok) throw new Error(`Upstream request failed (${response.status})`);
  return response;
 }
+
+// Whole editorial lines only: never clip a figure, negation, or qualification.
+export function briefingCopy(day = {}) {
+ const lines=[];
+ for (const story of day.stories || []) {
+  const line=String(story.quickSummary || story.title || '').replace(/<[^>]*>/g,'').replace(/\s+/g,' ').trim();
+  if (!line || [...line].length>130 || lines.includes(line)) continue;
+  if ([...lines.join(' • '),...(lines.length?' • ':''),...line].length>130) break;
+  lines.push(line);
+  if (lines.length===2) break;
+ }
+ return {title:"Today's briefing",body:lines.join(' • ') || 'Your latest edition is available.'};
+}

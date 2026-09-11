@@ -6,6 +6,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import publication as p
 
 
+PROSE = '<p>' + ('The buyer completed the property purchase after reviewing the financing documents and agreed to retain the existing tenants. ' * 8) + '</p>'
+
 def day():
     return {'date': '2026-09-11', 'generatedAt': '2026-09-11T12:00:00Z', 'stories': [
         {'id': 'a', 'title': 'Original', 'url': 'https://example.com/a', 'content': None},
@@ -124,7 +126,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_image_only_eligibility(self):
         import fill_content
-        story = {'url': 'https://example.com/a', 'content': 'word ' * 130}
+        story = {'url': 'https://example.com/a', 'content': PROSE}
         self.assertTrue(fill_content.needs_enrichment(story))
         story['imageChecked'] = True
         self.assertFalse(fill_content.needs_enrichment(story))
@@ -158,7 +160,7 @@ class TimingTests(unittest.TestCase):
         edited['stories'][0]['image'] = 'https://example.com/image'
         merged = p.merge_enrichment(base, edited, base, 'test', 'now')
         self.assertNotIn('contentReadyAt', merged['stories'][0])
-        edited['stories'][0]['content'] = '<p>' + 'word ' * 120 + '</p>'
+        edited['stories'][0]['content'] = PROSE
         merged = p.merge_enrichment(base, edited, base, 'test', 'now')
         self.assertEqual(merged['stories'][0]['contentReadyAt'], 'now')
         self.assertNotIn('summaryPublishedAt', merged['stories'][0])
@@ -189,7 +191,7 @@ class TimingTests(unittest.TestCase):
             def compare_swap(self, table, key, expected, replacement):
                 self.doc = copy.deepcopy(replacement); self.writes += 1; return True
         client = Fake(); incoming = day()
-        incoming['stories'][0]['content'] = 'word ' * 120
+        incoming['stories'][0]['content'] = PROSE
         with patch.object(p, 'utcnow', return_value='2026-09-11T12:01:00Z'):
             p.publish_document('days', incoming['date'], incoming, client)
         self.assertEqual(client.doc['stories'][0]['summaryPublishedAt'], '2026-09-11T12:01:00Z')
@@ -206,7 +208,7 @@ class TimingTests(unittest.TestCase):
 
     def test_unchanged_legacy_story_does_not_get_backdated_timestamps(self):
         from unittest.mock import patch
-        base = day(); base['stories'][0]['content'] = 'word ' * 120
+        base = day(); base['stories'][0]['content'] = PROSE
         class Fake:
             doc = base
             def read(self, *args): return self.doc

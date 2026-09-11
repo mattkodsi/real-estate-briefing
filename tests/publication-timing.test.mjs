@@ -34,7 +34,7 @@ test('standby filler publishes observed readiness timestamps through its real CA
   // readiness transition, mutation and database publication paths.
   source=source.replace(/import \{ safeFetch \} from "[^"]+";/,'const safeFetch=async()=>({ok:true,html:"fixture",finalUrl:"https://example.invalid/article"});');
   source=source.replace(/import \{ parseHTML \} from "[^"]+";/,'const parseHTML=()=>{throw Error("Unused extraction fixture")};');
-  source=source.replace('const out = extract(html);','const out = {ok:true,words:120,html:"<p>" + "word ".repeat(120) + "</p>",image:null};');
+  source=source.replace('const out = extract(html);','const out = {ok:true,words:120,html:"<p>" + "The buyer completed the purchase after reviewing the financing documents and will retain all existing tenants. ".repeat(8) + "</p>",image:null};');
   source=source.replace(/from (['"])(\.\.[^'"]+)\1/g,(_,q,path)=>'from '+q+new URL(path,base).href+q);
   await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64'));
   const response=await handler(new Request('https://example.invalid?date=2026-09-11&force=1',{headers:{'x-audit-secret':'fixture-owner'}}));

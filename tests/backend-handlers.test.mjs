@@ -12,6 +12,7 @@ async function load(name,fetcher){
   source=source.replace(/import \* as webpush from "jsr:[^"]+";/, 'const webpush={importVapidKeys:async()=>({}),ApplicationServer:{new:async()=>({subscribe:()=>({pushTextMessage:async()=>{throw new Error("Unexpected push in test");}})})}};');
   source=source.replace('const { date: today, hour } = nowET();','const {date:today,hour}={date:"2026-09-11",hour:12};');
  }
+ source=source.replace(/import (['"])(\.\.[^'"]+)\1/g,(_,q,path)=>'import '+q+new URL(path,base).href+q);
  source=source.replace(/from (['"])(\.\.[^'"]+)\1/g,(_,q,path)=>'from '+q+new URL(path,base).href+q);
  await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64')+'#'+Math.random());
  return handler;

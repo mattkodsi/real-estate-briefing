@@ -13,8 +13,9 @@
 // 9 PM–7 AM ET; unlogged items simply go out on the first morning run.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
-import { pushCopy, discoveryDates, checkedFetch, isPushEligible } from "../_shared/backend-policy.mjs";
+import { pushCopy, briefingCopy, discoveryDates, checkedFetch, isPushEligible } from "../_shared/backend-policy.mjs";
 import { drainDeliveries } from "../_shared/audit-delivery.mjs";
+import "../../../js/research-identities.js";
 import * as webpush from "jsr:@negrel/webpush@0.3.0";
 
 const SB_URL = Deno.env.get("SUPABASE_URL")!;
@@ -123,8 +124,7 @@ Deno.serve(async (req: Request) => {
         const to = [...subscribed].filter((p) => notifOf(p).ready === true);
         if (to.length) {
           await deliver(to, {
-            title: "Today's briefing is ready",
-            body: "Open today’s ranked real estate news.",
+            ...briefingCopy(day),
             url: `./#/day/${today}`,
             tag: id,
           });
@@ -145,6 +145,14 @@ Deno.serve(async (req: Request) => {
       const playerRows = await (await sb(
         `players?select=slug,data&slug=in.(${union.map((s) => `"${s}"`).join(",")})`,
       )).json();
+      // Reviewed aliases share history; keep the originally followed slug in
+      // watchItems so DB eligibility and existing preferences remain valid.
+      const related = [...new Set(playerRows.flatMap((r:any) =>
+        (r.data?.researchReviews || []).filter((v:any) => v.decision === 'same_entity').flatMap((v:any) => v.keys || [])))].filter((s:any) => typeof s === 'string' && /^[a-z0-9-]+$/.test(s) && !union.includes(s));
+      const relatedRows = related.length ? await (await sb(`players?select=slug,data&slug=in.(${related.map(s => `"${s}"`).join(",")})`)).json() : [];
+      const unified = (globalThis as any).ResearchIdentities.consolidate([...playerRows,...relatedRows].map((r:any) => ({slug:r.slug,...r.data})));
+      const canonical = new Map(unified.entries.map((p:any) => [p.slug,p]));
+      for (const row of playerRows) row.data = canonical.get(unified.aliases[row.slug] || row.slug) || row.data;
       for (const discoveryDay of discoveryDates(today)) {
       const todayMentions = new Map<string, { name: string; id: string; title: string }[]>();
       for (const row of playerRows || []) {

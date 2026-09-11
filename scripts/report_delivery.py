@@ -4,9 +4,12 @@ import argparse
 import json
 import math
 import statistics
+import re
+from urllib.parse import urlsplit
 from pathlib import Path
 
-from publication import content_words, timestamp
+from publication import timestamp
+from content_quality import assess_content
 
 FIELDS = ('firstPublishedAt', 'summaryPublishedAt', 'contentReadyAt', 'enrichedAt', 'fillAttemptedAt')
 
@@ -24,6 +27,7 @@ def push_report(rows):
     if not isinstance(rows, list):
         raise ValueError('Job aggregates must be an array')
     states = {}; count = 0; seconds = 0
+    device = {stage: {'present': False, 'count': 0, 'seconds': 0} for stage in ('received', 'displayed')}
     for row in rows:
         if not isinstance(row, dict) or row.get('state') not in ('pending', 'sending', 'retry', 'sent', 'gone', 'failed'):
             raise ValueError('Invalid job state aggregate')
@@ -37,13 +41,79 @@ def push_report(rows):
             raise ValueError('Observed latency samples require an explicit sum')
         if row['state'] != 'sent' and (valid or elapsed):
             raise ValueError('Only sent jobs measure provider acceptance')
+        for stage, values in device.items():
+            count_key, sum_key = f'valid_{stage}_latency_count', f'{stage}_latency_sum_seconds'
+            if count_key not in row and sum_key not in row:
+                continue
+            valid_device, elapsed_device = row.get(count_key), row.get(sum_key)
+            if type(valid_device) is not int or valid_device < 0 or valid_device > total:
+                raise ValueError('Invalid device observation denominator')
+            if isinstance(elapsed_device, bool) or not isinstance(elapsed_device, (float, int)) or not math.isfinite(elapsed_device) or elapsed_device < 0 or (valid_device == 0 and elapsed_device != 0):
+                raise ValueError('Device observation samples require a nonnegative explicit sum')
+            values['present'] = True
+            values['count'] += valid_device
+            values['seconds'] += elapsed_device
         states[row['state']] = states.get(row['state'], 0) + total
         count += valid; seconds += elapsed
-    return {'total': sum(states.values()), 'states': states,
+    total_jobs = sum(states.values())
+    def device_metric(stage):
+        values = device[stage]
+        if not values['present']:
+            return 'unmeasured'
+        return {'denominator': total_jobs, 'sample_count': values['count'],
+                'excluded_count': total_jobs - values['count'],
+                'mean_seconds': values['seconds'] / values['count'] if values['count'] else None,
+                'meaning': 'Job creation to server observation of service-worker acknowledgement, including callback network delay.'}
+    return {'total': total_jobs, 'states': states,
             'provider_acceptance': {'denominator': states.get('sent', 0), 'sample_count': count,
                                     'excluded_count': states.get('sent', 0) - count,
                                     'mean_seconds': seconds / count if count else None},
-            'device_receipt': 'unmeasured'}
+            'device_receipt': device_metric('received'), 'device_displayed': device_metric('displayed')}
+
+
+def mailbox_report(stories):
+    """One sample per story from earliest verified Gmail receipt linked to its URL."""
+    excluded = {'no_verified_receipt': 0, 'missing_timestamp': 0, 'malformed_timestamp': 0, 'backwards': 0}
+    samples = []
+    for story in stories:
+        coverage = story.get('coverage')
+        urls = [story.get('url')]
+        if isinstance(coverage, list):
+            urls.extend(row.get('url') for row in coverage if isinstance(row, dict))
+        urls = {url for url in urls if isinstance(url, str)}
+        receipts = story.get('sourceReceipts')
+        verified = []
+        for receipt in receipts if isinstance(receipts, list) else []:
+            if not isinstance(receipt, dict) or receipt.get('provider') != 'gmail':
+                continue
+            proof, url = receipt.get('messageHash'), receipt.get('url')
+            if not isinstance(proof, str) or not re.fullmatch(r'[a-f0-9]{64}', proof) or not isinstance(url, str) or url not in urls:
+                continue
+            try:
+                parsed_url = urlsplit(url)
+                if parsed_url.scheme not in ('http', 'https') or not parsed_url.hostname or parsed_url.username or parsed_url.password:
+                    continue
+            except ValueError:
+                continue
+            state, stamp = observed(receipt.get('receivedAt'))
+            if state == 'valid':
+                verified.append(stamp)
+        if not verified:
+            excluded['no_verified_receipt'] += 1
+            continue
+        state, first = observed(story.get('firstPublishedAt'))
+        if state != 'valid':
+            excluded[state + '_timestamp'] += 1
+            continue
+        elapsed = (first - min(verified)).total_seconds()
+        if elapsed < 0:
+            excluded['backwards'] += 1
+        else:
+            samples.append(elapsed)
+    return {'denominator': len(stories), 'sample_count': len(samples), 'excluded': excluded,
+            'min_seconds': min(samples) if samples else None,
+            'median_seconds': statistics.median(samples) if samples else None,
+            'max_seconds': max(samples) if samples else None}
 
 
 def build_report(data, jobs=None):
@@ -76,15 +146,17 @@ def build_report(data, jobs=None):
             else:
                 latencies.append(elapsed)
     result = {'days': len(rows), 'stories': len(stories), 'timestamps': coverage,
-              'current_content_ready': sum(content_words(s.get('content')) >= 120 for s in stories),
+              'current_content_ready': sum(assess_content(s.get('content'))['ready'] for s in stories),
               'summary_to_ready': {'denominator': len(stories), 'sample_count': len(latencies), 'excluded': excluded,
                                    'min_seconds': min(latencies) if latencies else None,
                                    'median_seconds': statistics.median(latencies) if latencies else None,
                                    'max_seconds': max(latencies) if latencies else None},
-              'mailbox_receipt_to_summary': 'unmeasured: no verified receipt-to-story mapping',
+              'mailbox_receipt_to_first_published': mailbox_report(stories),
               'limitations': ['firstPublishedAt records new story publication only; existing stories are not backdated.',
                               'summaryPublishedAt is the latest observed title/summary publication, not first receipt.',
-                              'contentReadyAt records an observed transition to at least 120 words; older content can predate it.',
+                              'Current readiness uses article-body quality checks; historical contentReadyAt can predate those checks and older content can predate its timestamp.',
+                              'Mailbox samples require Gmail messageHash, a linked source URL and timezone-qualified receivedAt; raw receivedAt alone is excluded.',
+                              'Device times are server observations including callback network delay; displayed means showNotification resolved, not human attention or reading.',
                               'Backwards pairs can follow editorial revisions; they are excluded, not repaired.',
                               'Current snapshots do not establish uninterrupted content availability or device receipt.']}
     if jobs is not None:

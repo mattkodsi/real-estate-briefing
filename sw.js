@@ -12,6 +12,7 @@ const SHELL_ASSETS = [
   "./js/app.js?v=153",
   "./js/data-client.js?v=153",
   "./js/briefing-core.js?v=153",
+  "./js/research-identities.js?v=153",
   "./js/overlay-focus.js?v=153",
   "./js/profile-store.js?v=153",
   "./manifest.webmanifest?v=153",
@@ -178,9 +179,27 @@ async function inboxAdd(entry) {
   }
 }
 
+// Device observations use a fixed endpoint and a private per-delivery proof.
+// They never delay showing the alert, and never mean that a person read it.
+async function observeDelivery(receipt, stage) {
+  if (!receipt || !/^[1-9][0-9]{0,18}$/.test(String(receipt.id || "")) ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(receipt.token || "")) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4000);
+  try {
+    await fetch("https://uhwdnmbxiopfysodydty.supabase.co/functions/v1/delivery-receipt", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: String(receipt.id), token: receipt.token, stage }),
+      signal: controller.signal, credentials: "omit", cache: "no-store",
+    });
+  } catch { /* observations are best-effort; notification delivery comes first */ }
+  finally { clearTimeout(timer); }
+}
+
 self.addEventListener("push", (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch { d = { title: "Real Estate Briefing" }; }
+  e.waitUntil(observeDelivery(d.receipt, "received"));
   e.waitUntil((async () => {
     try {
       await inboxAdd({
@@ -197,6 +216,7 @@ self.addEventListener("push", (e) => {
       icon: "./icon.svg",
       data: { url: d.url || "./" },
     });
+    await observeDelivery(d.receipt, "displayed");
   })());
 });
 

@@ -5,7 +5,11 @@ export async function drainDeliveries(rpc, send, limit=40, event=null) {
  for(let i=0;i<limit;i++) {
   const [job]=await rpc('audit_claim_push',event===null?{}:{p_event:event});if(!job)break;
   let outcome='sent';let error='';
-  try {await send(job);} catch(e) {
+  try {
+   // The stable per-job capability is transport metadata, never editorial data.
+   const outgoing=job.receipt_token?{...job,payload:{...job.payload,receipt:{id:String(job.id),token:job.receipt_token}}}:job;
+   await send(outgoing);
+  } catch(e) {
    const status=e?.response?.status;
    outcome=status===404||status===410||e?.isGone?.()===true?'gone':'retry';
    error=String(e).slice(0,300);

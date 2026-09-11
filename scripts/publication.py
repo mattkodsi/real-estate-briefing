@@ -2,6 +2,8 @@
 
 Requires 202609110001_publication_integrity.sql. No fallback to unsafe upserts.
 """
+from content_quality import assess_content
+from editorial_quality import prepare_editorial, validate_claims
 import copy
 import html
 import json
@@ -15,7 +17,7 @@ SUPABASE_URL = 'https://uhwdnmbxiopfysodydty.supabase.co'
 ANON_KEY = 'sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y'
 KEYS = {'days': 'date', 'weeks': 'week_of', 'players': 'slug', 'terms': 'slug',
         'threads': 'slug', 'campaigns': 'slug', 'events': 'id', 'metrics': 'id'}
-ENRICHMENT_FIELDS = ('content', 'image', 'url', 'imageChecked', 'sourceBlocked', 'fillAttemptedAt')
+ENRICHMENT_FIELDS = ('content', 'image', 'url', 'imageChecked', 'sourceBlocked', 'fillAttemptedAt', 'contentStatus', 'fillError', 'publisher', 'coverage')
 MISSING = object()
 
 
@@ -102,10 +104,15 @@ def content_words(value):
 
 def stamp_editorial(doc, current, now):
     """Record observed publication transitions, never inferred historical times."""
-    result = copy.deepcopy(doc)
+    result = prepare_editorial(doc, current)
     previous = {story['id']: story for story in (current or {}).get('stories', [])}
     for story in result.get('stories', []):
         before = previous.get(story['id'])
+        if before and story.get('url') == before.get('url') and not story.get('content') and assess_content(before.get('content'))['ready']:
+            for key in ('content','image','contentStatus','contentReadyAt'):
+                if key in before and not story.get(key):
+                    story[key] = copy.deepcopy(before[key])
+        validate_claims(story)
         # These fields are publication observations; preserve the remote record,
         # not generator-provided guesses or timestamps copied from another story.
         for field in ('firstPublishedAt', 'summaryPublishedAt', 'contentReadyAt'):
@@ -117,7 +124,11 @@ def stamp_editorial(doc, current, now):
             story['firstPublishedAt'] = now
         if before is None or any(story.get(field) != before.get(field) for field in ('title', 'summary')):
             story['summaryPublishedAt'] = now
-        if content_words(story.get('content')) >= 120 and (before is None or content_words(before.get('content')) < 120):
+        ready = assess_content(story.get('content'))
+        story['contentStatus'] = ready['status']
+        if not ready['ready']:
+            story.pop('contentReadyAt', None)
+        if ready['ready'] and (before is None or not assess_content(before.get('content'))['ready']):
             story['contentReadyAt'] = now
     return result
 
@@ -136,9 +147,14 @@ def merge_enrichment(base, edited, current, worker, now):
         before, after = old.get(story['id']), new.get(story['id'])
         if before is None or after is None or story.get('url') != before.get('url'):
             continue
-        was_ready = content_words(story.get("content")) >= 120
+        was_ready = assess_content(story.get("content"))["ready"]
         touched = False
+        bundle = ('url', 'content', 'publisher', 'coverage', 'image', 'contentStatus', 'fillError')
+        adopting = after.get('url') != before.get('url') or after.get('publisher') != before.get('publisher')
+        bundle_conflict = (story.get('publisher') != before.get('publisher') or story.get('coverage') != before.get('coverage')) or (adopting and any(story.get(k, MISSING) != before.get(k, MISSING) for k in bundle))
         for field in ENRICHMENT_FIELDS:
+            if bundle_conflict and field in bundle:
+                continue
             prior, desired = before.get(field, MISSING), after.get(field, MISSING)
             if prior == desired or story.get(field, MISSING) != prior:
                 continue
@@ -148,9 +164,14 @@ def merge_enrichment(base, edited, current, worker, now):
                 story[field] = copy.deepcopy(desired)
             touched = changed = True
         if touched:
+            validate_claims(story)
             story['enrichedAt'] = now
             story['enrichedBy'] = worker
-            if not was_ready and content_words(story.get('content')) >= 120:
+            ready = assess_content(story.get('content'))
+            story['contentStatus'] = ready['status']
+            if not ready['ready']:
+                story.pop('contentReadyAt', None)
+            if not was_ready and ready['ready']:
                 story['contentReadyAt'] = now
     if changed:
         result['generatedAt'] = now
@@ -174,11 +195,42 @@ def publish_enrichment(base, edited, worker, client=None, attempts=4):
     raise RuntimeError('Publication conflict after bounded retries; rerun against fresh data')
 
 
+def validate_research_publication(table, doc, current, client):
+    from reference_repair import reference_containers, reviewed_unavailable, validate_registry_references
+    if table not in ('players','terms','threads','campaigns'):
+        return
+    old_refs=[r for _,refs in reference_containers(table,current or {}) for r in refs if isinstance(r,dict)]
+    dates={}
+    for _, refs in reference_containers(table,doc):
+        for ref in refs:
+            if reviewed_unavailable(ref):
+                if ref not in old_refs:
+                    raise ValueError('New source-unavailable markers require an evidence-reviewed repair')
+                continue
+            if not isinstance(ref,dict) or not ref.get('date'):
+                continue
+            date=validate_date(ref['date'])
+            if date not in dates:
+                dates[date]=client.read('days',date)
+    if table == 'players':
+        for _, refs in reference_containers(table,doc):
+            for ref in refs:
+                if not isinstance(ref,dict) or reviewed_unavailable(ref): continue
+                source=next((s for s in (dates.get(ref.get('date')) or {}).get('stories',[]) if s.get('id')==ref.get('id')),{})
+                if any(c.get('incorrect','').casefold()==str(doc.get('name','')).casefold() for c in source.get('identityCorrections',[])):
+                    raise ValueError('Previously corrected profile/story identity reintroduced')
+    errors=validate_registry_references(table,doc,dates)
+    if errors:
+        raise ValueError('Research reference validation failed: '+str(errors))
+
+
 def publish_document(table, key, doc, client=None):
     """Editorial publication must be newer; a racing change requires regeneration."""
     client = client or Client()
     validate_document(table, doc)
     current = client.read(table, key)
+    if current is not None and {k:v for k,v in current.items() if k != 'publishedAt'} == {k:v for k,v in doc.items() if k != 'publishedAt'}:
+        return
     now = utcnow()
     replacement = stamp_editorial(doc, current, now) if table == "days" else copy.deepcopy(doc)
     if current is not None and {k: v for k, v in current.items() if k != "publishedAt"} == {k: v for k, v in replacement.items() if k != "publishedAt"}:
@@ -187,6 +239,10 @@ def publish_document(table, key, doc, client=None):
         old_time = current.get('generatedAt') or current.get('publishedAt')
         if old_time and timestamp(doc.get('generatedAt')) <= timestamp(old_time):
             raise RuntimeError('Refusing stale or same-timestamp replacement: ' + table + '/' + key)
+    if table in ('players','terms') and current and all(current.get(k)==replacement.get(k) for k in ('name','term','type')):
+        for field in ('researchReviews','relatedResearch','researchCorrections'):
+            if field in current and field not in replacement: replacement[field]=copy.deepcopy(current[field])
+    validate_research_publication(table, replacement, current, client)
     replacement['publishedAt'] = now
     if not client.compare_swap(table, key, current, replacement):
         raise RuntimeError('Concurrent publication; reload before publishing ' + table + '/' + key)

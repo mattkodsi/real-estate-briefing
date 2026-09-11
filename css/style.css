@@ -3828,3 +3828,6 @@ summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; bor
 }
 
 .sheet.story-peek .sheet-close { position:absolute; top:8px; right:12px; width:28px; height:28px; float:none; }
+
+[data-source-unavailable="true"] { opacity: 1; cursor: default; }
+[data-source-unavailable="true"]::after { content: "Source unavailable"; display: block; font-size: 11px; color: var(--muted); margin-top: 4px; }
