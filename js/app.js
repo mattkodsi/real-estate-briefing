@@ -354,7 +354,12 @@ async function init() {
   // card's own click. They open the mini-dossier sheet (full page one tap away).
   document.addEventListener("click", (e) => {
     // a hold-peek just released on this element — swallow the tap it would fire
-    if (peekSwallowClick) { peekSwallowClick = false; e.preventDefault(); e.stopPropagation(); return; }
+    if (peekSwallowClick) {
+      peekSwallowClick = false;
+      // A prevented touchend may generate no synthetic click. Never consume the
+      // next deliberate tap on the preview's Open or Close controls.
+      if (!e.target.closest?.("#sheet")) { e.preventDefault(); e.stopPropagation(); return; }
+    }
     const entity = e.target.closest?.(".entity-link");
     if (entity) {
       e.preventDefault();
@@ -2280,7 +2285,7 @@ async function renderWeekly() {
   wrap.appendChild(label);
 
   if (wk.overview) {
-    const summary = document.createElement('details'); summary.className = 'weekly-synthesis';
+    const summary = document.createElement('details'); summary.className = 'weekly-synthesis synthesis-dropdown';
     const label = document.createElement('summary'); label.textContent = 'The week in context';
     const p = document.createElement('p'); p.className = 'week-overview'; p.textContent = wk.overview;
     summary.append(label, p); wrap.appendChild(summary); linkifyElement(p);
@@ -5683,6 +5688,7 @@ function openSheet(build, opts) {
   // tapped dossier stays a bottom sheet. The .peek class swaps the CSS, and
   // onFling (if given) is what a fling-up-to-open does for this sheet.
   sheet.classList.toggle("peek", !!opts.peek);
+  sheet.classList.toggle("story-peek", !!opts.storyPeek);
   peekFling = opts.onFling || null;
   build(card);
   const dismiss = document.createElement('button'); dismiss.className = 'sheet-close';
@@ -5898,7 +5904,7 @@ function openStoryPeek(date, id, originRect) {
       open.addEventListener("click", () => sheetOpenStory(date, id));
       card.appendChild(open);
     }
-  }, { peek: true, originRect, onFling: expandable ? () => sheetOpenStory(date, id) : null }); // grow into a floating rounded card from the pressed card
+  }, { peek: true, storyPeek: true, originRect, onFling: expandable ? () => sheetOpenStory(date, id) : null }); // grow into a floating rounded card from the pressed card
   // NB: we do NOT start the drag here — the feed handler lazy-starts it on the
   // first finger move (capturing the finger's position then), so the card never
   // snaps from mid-rise to the finger. `fromY` is unused now, kept for clarity.

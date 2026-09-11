@@ -3475,7 +3475,7 @@ button.cal-open:active { background: var(--rule); }
   align-items: center;
   position: absolute;          /* within the stable #bn-layer */
   left: 50%;
-  bottom: calc(10px + env(safe-area-inset-bottom));
+  bottom: max(6px, env(safe-area-inset-bottom));
   transform: translateX(-50%);
   width: min(var(--page), calc(100vw - 24px));
   pointer-events: auto;
@@ -3547,12 +3547,12 @@ button.cal-open:active { background: var(--rule); }
 }
 
 /* keep the last cards clear of the floating bar */
-:root[data-look="updated"] main { padding-bottom: 92px; }
+:root[data-look="updated"] main { padding-bottom:calc(66px + env(safe-area-inset-bottom)); }
 
 /* the day's brief gets its own accent-tinted cards — clearly NOT story cards
    (blue-tinted = the synthesis; neutral = the individual stories) */
 :root[data-look="updated"] #lede-block { display: flex; flex-direction: column; gap: 12px; }
-:root[data-look="updated"] #overview-col,
+:root[data-look="updated"] .synthesis-dropdown,
 :root[data-look="updated"] #kp-col {
   background: var(--brief-tint);
   border: 1px solid var(--brief-bd);
@@ -3715,7 +3715,6 @@ body.reader-open #bn-layer { visibility:hidden; }
   *, *::before, *::after { scroll-behavior:auto !important; animation-duration:0.01ms !important; animation-delay:0ms !important; transition-duration:0.01ms !important; }
 }
 .update-notice { position:fixed; bottom:calc(66px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%); z-index:1000; padding:8px 14px; border-radius:18px; background:var(--ink); color:var(--box); font-size:12px; white-space:nowrap; }
-.weekly-synthesis > summary { cursor:pointer; padding:10px 0; font:600 18px/1.4 var(--serif); }
 .weekly-synthesis { margin-bottom:16px; }
 
 .reader-swipe-panel { position:fixed; inset:0; z-index:501; background:var(--bg); overflow:hidden; pointer-events:none; overscroll-behavior:contain; will-change:transform; }
@@ -3729,7 +3728,7 @@ body.reader-open #bn-layer { visibility:hidden; }
 #reader.reader-swiping::-webkit-scrollbar { display:none; }
 /* Keep all phone chrome in one row; shorten labels as space narrows. */
 :root { --pad:max(clamp(16px,4.5vw,28px),env(safe-area-inset-left),env(safe-area-inset-right)); }
-:root[data-look="updated"] #bottom-nav { width:min(var(--page),calc(100vw - max(12px,env(safe-area-inset-left),env(safe-area-inset-right)) - max(12px,env(safe-area-inset-left),env(safe-area-inset-right)))); }
+:root[data-look="updated"] #bottom-nav { width:min(var(--page),calc(100vw - max(8px,env(safe-area-inset-left),env(safe-area-inset-right)) - max(8px,env(safe-area-inset-left),env(safe-area-inset-right)))); }
 :root[data-look="updated"] #bottom-nav a { font-size:clamp(8px,2.7vw,10px); }
 @media (max-width:350px) {
   .wordmark { font-size:15px; }
@@ -3765,12 +3764,12 @@ body.reader-open #bn-layer { visibility:hidden; }
 .thread-list, .arc-list, .desk-grid { margin-bottom:var(--space-block); }
 .chips { gap:6px; margin-top:8px; }
 :root[data-look="updated"] #lede-block { gap:var(--space-list); margin:4px 0 var(--space-block); }
-:root[data-look="updated"] #overview-col,
+:root[data-look="updated"] .synthesis-dropdown,
 :root[data-look="updated"] #kp-col { padding:var(--card-inset); }
 #overview-col { margin-bottom:var(--space-list); }
 :root[data-look="updated"] #overview-col { margin-bottom:0; }
-#overview-col > summary { padding:0; min-height:24px; }
-#overview-col #lede { margin-top:8px; font-size:13px; line-height:1.55; }
+.synthesis-dropdown > summary { padding:0; min-height:24px; }
+.synthesis-dropdown #lede, #weekly-content .synthesis-dropdown .week-overview { margin:8px 0 0; font-size:13px; line-height:1.55; color:var(--ink); }
 #kp-kicker { margin-bottom:4px; }
 #key-points li { padding-top:5px; padding-bottom:5px; }
 #key-points li::before { top:12px; }
@@ -3799,7 +3798,7 @@ details > summary::after {
   transition:transform 180ms ease;
 }
 details[open] > summary::after { transform:rotate(90deg); color:var(--accent); }
-.weekly-synthesis > summary, .research-references > summary { display:flex; padding:6px 0; margin:0; font:600 14px/1.4 var(--serif); }
+.research-references > summary { display:flex; padding:6px 0; margin:0; font:600 14px/1.4 var(--serif); }
 summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; border-radius:3px; }
 .ui-chevron { display:inline-block; width:14px; height:14px; vertical-align:-2px; margin-left:4px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; flex:none; }
 .ui-chevron-back { transform:rotate(180deg); }
@@ -3807,3 +3806,25 @@ summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; bor
 .arc-caret .ui-chevron, .nav-arrow .ui-chevron, .map-play-btn .ui-chevron { margin:0; }
 .nav-arrow .ui-chevron { width:12px; height:12px; }
 @media (prefers-reduced-motion:reduce) { details > summary::after { transition:none; } }
+
+/* Daily and weekly synthesis are one component, including legacy appearance. */
+.synthesis-dropdown {
+  background:var(--brief-tint, var(--box));
+  border:1px solid var(--brief-bd, var(--rule));
+  border-radius:14px; padding:var(--card-inset);
+  box-shadow:inset 0 1px 0 var(--card-rim, transparent), var(--card-shadow);
+}
+:root[data-look="updated"] .weekly-synthesis { margin:0 0 var(--space-block); }
+
+/* Story previews meet the screen edge; the home-indicator inset belongs inside
+   the sheet, never in a floating gap beneath it. Other dossier peeks retain
+   their existing presentation. */
+.sheet.story-peek .sheet-card {
+  left:0; right:0; bottom:0; max-width:560px;
+  border-radius:22px 22px 0 0;
+  padding:12px max(16px, env(safe-area-inset-left)) calc(16px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-right));
+  max-height:calc(100dvh - max(16px, env(safe-area-inset-top)));
+  overscroll-behavior:contain;
+}
+
+.sheet.story-peek .sheet-close { position:absolute; top:8px; right:12px; width:28px; height:28px; float:none; }

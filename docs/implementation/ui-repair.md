@@ -28,3 +28,11 @@ These are browser/emulated-touch checks, not a claim of physical-device testing 
 - Use Index and Stories at all screen sizes. Index contains People, Companies and Terms; existing deep-link routes stay compatible. Replace the former Storylines wording in navigation, headings, help copy and return links.
 - Align comparable card padding (12px vertical, 14px horizontal), list gaps (8px), block gaps (12px), and section separation (20px). Preserve reading paragraphs, timeline structure, safe areas, one-row chrome and directional auto-hide.
 - Browser checks: 280–1024px width matrix, no horizontal overflow and one navigation row; Briefing, Weekly, Index/Terms, Stories, Desk and Status rendered without runtime errors. Inspected light/dark and expanded states; keyboard disclosure toggling and full-page finger-tracked reader swiping passed. These are emulated browser checks, not physical-device certification.
+
+## Shared dropdown and bottom-edge correction (v153)
+
+Daily and weekly disclosures now use the same `synthesis-dropdown` component, not just matching chevrons. Computed closed height (50px), padding, tint, border, radius, shadow and summary typography match exactly. Body typography also shares one rule.
+
+Story hold previews attach to bottom:0 with square bottom corners, rounded top corners and home-indicator padding inside the sheet. The close control no longer floats into and narrows the hero image. Opening the preview through a touch hold and tapping Open story now works on the first tap even when the prevented release generated no synthetic click.
+
+The navigation keeps one row, reduces its side gutters to 8px (or the larger safe-area inset), and rests at max(6px, bottom safe area). Content clearance includes the same safe area. Verified preview bottom equals viewport bottom at 280, 320, 390 and 440px portrait widths and 844px landscape; no horizontal overflow. Desktop preview width remains capped. Browser checks do not substitute for physical iPhone inspection.
