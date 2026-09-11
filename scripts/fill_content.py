@@ -22,6 +22,9 @@ line like "filled 14/16 · 2 failed (ids…)" so the routine can fold any
 persistent failure into the day's notes.
 """
 import json
+import copy
+import argparse
+import publication
 import pathlib
 import re
 import sys
@@ -126,35 +129,36 @@ def _today() -> str:
     return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
 
 
-def record_heartbeat(date: str, filled: int, failed: int, via: str) -> None:
+def record_heartbeat(date: str, filled: int, failed: int, via: str, state: str = "completed") -> None:
     """Pulse for the failover chain: every filler run (even a no-op) upserts a
     status row so the cloud routine and the Mac watchdog can detect a dead
     primary (GitHub Actions) and take over. Never fatal."""
     import os
-    row = {"id": "fill_heartbeat", "data": {
-        "lastRun": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "date": date, "filled": filled, "failed": failed,
-        "via": via or ("github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "local"),
+    worker = via or ("github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "local")
+    row = {"id": "fill_" + worker, "data": {
+        "lastRun": publication.utcnow(), "date": date,
+        "filled": filled, "failed": failed, "via": worker, "state": state,
+        "runId": os.environ.get("GITHUB_RUN_ID"),
     }}
     try:
         req = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/secrets", data=json.dumps(row).encode(),
+            f"{SUPABASE_URL}/rest/v1/publication_workers", data=json.dumps(row).encode(),
             headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}",
                      "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
             method="POST")
         urllib.request.urlopen(req, timeout=15).read()
-    except Exception:
-        pass  # a failed pulse must never break a fill run
+    except Exception as exc:
+        print(f"  WARN worker status unavailable: {exc}")
 
 
 def read_heartbeat() -> dict | None:
     """The last pulse, or None. Used by fallbacks to decide whether to act."""
     try:
         req = urllib.request.Request(
-            f"{SUPABASE_URL}/rest/v1/secrets?id=eq.fill_heartbeat&select=data",
+            f"{SUPABASE_URL}/rest/v1/publication_workers?id=eq.fill_github-actions&select=data",
             headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}"})
         rows = json.load(urllib.request.urlopen(req, timeout=15))
-        return rows[0]["data"] if rows else None
+        return rows[0]["data"] if rows and rows[0]["data"].get("state") in ("started", "running", "completed") else None
     except Exception:
         return None
 
@@ -176,22 +180,26 @@ def _load_supabase(date: str) -> dict | None:
     return rows[0]["data"] if rows else None
 
 
-def _push(day: dict) -> None:
-    row = {"date": day["date"], "data": day, "generated_at": day.get("generatedAt")}
-    req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/days",
-        data=json.dumps(row).encode(),
-        headers={
-            "apikey": ANON_KEY,
-            "Authorization": f"Bearer {ANON_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        if resp.status not in (200, 201):
-            raise RuntimeError(f"push failed: HTTP {resp.status}")
+def _push(day: dict, base: dict, worker: str = "http") -> dict:
+    return publication.publish_enrichment(base, day, worker)
+
+
+def load_day(date: str, no_push: bool = False):
+    publication.validate_date(date)
+    path = DATA / f"{date}.json"
+    if no_push:
+        local, path = _load_local(date)
+        if local is not None:
+            return local, path
+    # A publication run always begins with current remote data. A stale local
+    # file must never determine which article/source gets fetched.
+    return _load_supabase(date), path
+
+
+def needs_enrichment(story):
+    return bool(story.get("url")) and (
+        _words(story.get("content")) < MIN_WORDS
+        or (not story.get("image") and not story.get("imageChecked")))
 
 
 def _try_story(s: dict) -> tuple[str, object]:
@@ -250,7 +258,7 @@ def _try_story(s: dict) -> tuple[str, object]:
     return "failed", f"only {res.get('words', 0)} words"
 
 
-def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
+def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_seconds: float = 600) -> dict:
     """Fetch content for every story that still needs it. Mutates `day` in place.
 
     Fetches are spaced out (`throttle`) so a burst never trips the tracking-link
@@ -260,6 +268,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
     miss that the next scheduled run will retry again.
 
     Returns a report: {filled, failed, paywalled, skipped, attempted}."""
+    deadline = time.monotonic() + max_seconds
     stories = day.get("stories") or []
     # briefs render compactly in the feed but still get full text — every story
     # with a url deserves a reader page
@@ -270,15 +279,22 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
     to_fetch = [s for s in stories if s.get("url") and (
         _words(s.get("content")) < MIN_WORDS
         or (not s.get("image") and not s.get("imageChecked")))]
+    to_fetch.sort(key=lambda s: s.get("fillAttemptedAt") or "")
     skipped = len(stories) - len(to_fetch)
     filled, paywalled, dropped = [], [], []
+    attempted_ids = set()
     unresolved = {}  # id -> (kind, detail); kind in {"blocked", "failed"}
 
     def run_pass(items: list, tag: str) -> None:
         for i, s in enumerate(items):
+            if time.monotonic() >= deadline:
+                print("  Runtime budget reached; remaining articles deferred")
+                break
             if i:
                 time.sleep(throttle)  # space out to dodge tracking-link rate limits
             sid = s.get("id")
+            attempted_ids.add(sid)
+            s["fillAttemptedAt"] = publication.utcnow()
             status, detail = _try_story(s)
             if status == "filled":
                 filled.append(sid)
@@ -323,7 +339,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
 
     run_pass(to_fetch, "")
     retry = [s for s in to_fetch if s.get("id") in unresolved]
-    if retry:
+    if retry and time.monotonic() + retry_wait < deadline:
         print(f"  … retrying {len(retry)} after {retry_wait:.0f}s (rate-limit / bot-wall may clear)")
         time.sleep(retry_wait)
         run_pass(retry, "  (retry)")
@@ -339,6 +355,8 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
     # story has real in-app text, or is just a self-contained blurb (category B).
     blocked_ids = {i for i, _ in blocked}
     for s in to_fetch:
+        if s.get("id") not in attempted_ids:
+            continue
         if _words(s.get("content")) >= 80:
             s.pop("sourceBlocked", None)
         elif s.get("id") in blocked_ids:
@@ -347,38 +365,41 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25) -> dict:
             s.pop("sourceBlocked", None)
 
     return {"filled": filled, "failed": failed, "blocked": blocked, "paywalled": paywalled,
-            "dropped": dropped, "skipped": skipped, "attempted": len(to_fetch)}
+            "dropped": dropped, "skipped": skipped, "attempted": len(attempted_ids)}
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    no_push = "--no-push" in sys.argv
-    date = args[0] if args else _today()
-
-    day, path = _load_local(date)
-    source = "local file"
-    if day is None:
-        day = _load_supabase(date)
-        source = "Supabase"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("date", nargs="?", type=publication.validate_date, default=_today())
+    parser.add_argument("--no-push", action="store_true")
+    args = parser.parse_args()
+    date, no_push = args.date, args.no_push
+    day, path = load_day(date, no_push)
+    source = "local/remote" if no_push else "Supabase"
     if day is None:
         print(f"No day found for {date} (checked local file and Supabase).")
         return 1
 
     print(f"Filling content for {date}  (loaded from {source}, {len(day.get('stories') or [])} stories)")
+    base = copy.deepcopy(day)
+    if not no_push:
+        record_heartbeat(date, 0, 0, "http", state="started")
     rep = fill_day(day)
 
-    # persist: always write the local file so a later push_data.py stays in sync
+    if not no_push:
+        try:
+            day = _push(day, base, "http")
+            print("  published enrichment against current Supabase data")
+        except Exception as e:
+            record_heartbeat(date, 0, len(rep["failed"]), "http", state="failed")
+            print(f"  ERROR publication failed: {e}")
+            return 1
+    if no_push and day != base:
+        day["generatedAt"] = publication.utcnow()
     DATA.mkdir(exist_ok=True)
     path.write_text(json.dumps(day, ensure_ascii=False, indent=2))
-
-    if (rep["filled"] or rep.get("dropped")) and not no_push:
-        try:
-            _push(day)
-            print("  published updated day to Supabase")
-        except Exception as e:  # noqa: BLE001
-            print(f"  WARN push failed: {e}")
-
-    record_heartbeat(date, len(rep["filled"]), len(rep["failed"]) + len(rep["blocked"]), "")
+    if not no_push:
+        record_heartbeat(date, len(rep["filled"]), len(rep["failed"]) + len(rep["blocked"]), "http")
 
     # summary line the routine can read at a glance
     parts = [f"filled {len(rep['filled'])}/{rep['attempted']}"]

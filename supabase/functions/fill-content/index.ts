@@ -3,7 +3,7 @@
 //
 // A pg_cron job (fill-heartbeat-standby, every 15 min) invokes this function.
 // While the primary filler (the GitHub Actions headless-browser workflow) is
-// alive — its pulse in the `secrets` row `fill_heartbeat` is fresh — this
+// alive — its publication_workers primary pulse is fresh — this
 // function exits immediately. When the pulse goes stale, it takes over with
 // plain-HTTP fetching + DOM extraction, filling a small batch per invocation
 // (edge CPU limits) until the queue drains across invocations.
@@ -15,6 +15,7 @@
 //
 // GET/POST ?date=YYYY-MM-DD (default today ET) &force=1 (skip standby check)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { readPrimaryHeartbeat } from "../_shared/fill-heartbeat.mjs";
 import { safeFetch } from "../_shared/audit-fetch.mjs";
 import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
 import { parseHTML } from "https://esm.sh/linkedom@0.18.5/worker";
@@ -165,8 +166,12 @@ Deno.serve(async (req: Request) => {
   // standby: act only when the primary's pulse is stale
   if (!force) {
     try {
-      const rows = await (await sb("secrets?id=eq.fill_heartbeat&select=data")).json();
-      const last = rows?.[0]?.data?.lastRun;
+      const heartbeat = await readPrimaryHeartbeat(async (path: string) => {
+        const response = await sb(path);
+        if (!response.ok) throw new Error("heartbeat unavailable");
+        return await response.json();
+      });
+      const last = heartbeat?.lastRun;
       if (last) {
         const ageMin = (Date.now() - Date.parse(last)) / 60000;
         if (ageMin <= STALE_AFTER_MIN) {
@@ -223,6 +228,11 @@ Deno.serve(async (req: Request) => {
     await sb("secrets", { method: "POST", body: JSON.stringify({ id: "fill_heartbeat", data: {
       lastRun: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
       date, filled: filled.length, failed: failed.length, via: "supabase-edge",
+    } }) });
+    // Keep the legacy pulse above for older routines during the rollout.
+    await sb("publication_workers", { method: "POST", body: JSON.stringify({ id: "fill_supabase-edge", data: {
+      lastRun: new Date().toISOString(), date, filled: filled.length,
+      failed: failed.length, via: "supabase-edge", state: "completed",
     } }) });
   }
 

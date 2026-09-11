@@ -21,6 +21,10 @@ Usage:
 Requires:  pip install playwright && playwright install chromium
 """
 import json
+import copy
+import argparse
+import os
+import publication
 import pathlib
 import sys
 import time
@@ -94,29 +98,29 @@ def _recent_dates(today: str) -> list[str]:
     return [(base - timedelta(days=i)).isoformat() for i in range(BACKFILL_DAYS + 1)]
 
 
-def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[int, int]:
+def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: float | None = None) -> tuple[int, int]:
     """Fill every straggler in one day with the shared browser. Returns
     (filled, failed). A day with nothing missing is a fast no-op (no fetches)."""
-    day, path = fill_content._load_local(date)
-    source = "local file"
-    if day is None:
-        day = fill_content._load_supabase(date)
-        source = "Supabase"
+    day, path = fill_content.load_day(date, no_push)
+    source = "local/remote" if no_push else "Supabase"
     if day is None:
         return 0, 0
 
+    base = copy.deepcopy(day)
     stories = day.get("stories") or []
-    targets = [s for s in stories
-               if s.get("url") and (
-                   fill_content._words(s.get("content")) < fill_content.MIN_WORDS
-                   or (not s.get("image") and not s.get("imageChecked")))]
+    targets = sorted((s for s in stories if fill_content.needs_enrichment(s)),
+                     key=lambda s: s.get("fillAttemptedAt") or "")
     if not targets:
         return 0, 0
     print(f"{date} ({source}): {len(stories)} stories, {len(targets)} need content")
 
     filled, failed, changed_urls = [], [], 0
     for s in targets:
+        if deadline is not None and time.monotonic() >= deadline:
+            print("  Runtime budget reached; unattempted articles remain for next run")
+            break
         sid = s.get("id")
+        s["fillAttemptedAt"] = publication.utcnow()
         # a fabricated Bisnow short-link (descriptive slug) 404s forever — drop the
         # dead url so the app shows summary-only instead of linking to a 404
         if fetch_article.is_fabricated_bisnow_shortlink(s.get("url", "")):
@@ -205,16 +209,14 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
             failed.append((sid, str(e)[:70]))
             print(f"  ✗ {sid:<40} {str(e)[:70]}")
 
-    if filled or changed_urls:
-        day["generatedAt"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        fill_content.DATA.mkdir(exist_ok=True)
-        path.write_text(json.dumps(day, ensure_ascii=False, indent=2))
-        if not no_push:
-            try:
-                fill_content._push(day)
-                print(f"  published {date} to Supabase")
-            except Exception as e:  # noqa: BLE001
-                print(f"  WARN push failed for {date}: {e}")
+    # Persist status/image-check-only changes too. Failure propagates to the
+    # caller, which records it and keeps processing independent days.
+    if not no_push:
+        day = fill_content._push(day, base, "browser")
+    elif day != base:
+        day["generatedAt"] = publication.utcnow()
+    fill_content.DATA.mkdir(exist_ok=True)
+    path.write_text(json.dumps(day, ensure_ascii=False, indent=2))
 
     parts = [f"{date}: filled {len(filled)}/{len(targets)}"]
     if failed:
@@ -224,31 +226,38 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool) -> tuple[in
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    no_push = "--no-push" in sys.argv
-    # an explicit date fills just that day; otherwise sweep today + recent days so
-    # stragglers that rolled off "today" still get a real-browser attempt
-    dates = [args[0]] if args else _recent_dates(fill_content._today())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("date", nargs="?", type=publication.validate_date)
+    parser.add_argument("--no-push", action="store_true")
+    args = parser.parse_args()
+    no_push = args.no_push
+    dates = [args.date] if args.date else _recent_dates(fill_content._today())
+    worker = "github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "browser-local"
+    if not no_push:
+        fill_content.record_heartbeat(dates[0], 0, 0, worker, state="started")
 
     # cheap pre-check: if NOTHING across the window needs content, skip launching
     # a browser entirely (the common steady-state — keeps no-op runs seconds long)
     any_targets = False
+    day_priority = {}
     for date in dates:
-        day, _ = fill_content._load_local(date)
-        if day is None:
-            day = fill_content._load_supabase(date)
-        if day and any(fill_content._words(s.get("content")) < fill_content.MIN_WORDS and s.get("url")
-                       for s in (day.get("stories") or [])):
+        day, _ = fill_content.load_day(date, no_push)
+        targets = [s for s in (day or {}).get("stories", []) if fill_content.needs_enrichment(s)]
+        if targets:
             any_targets = True
-            break
+            day_priority[date] = min(s.get("fillAttemptedAt") or "" for s in targets)
+    # Oldest unattempted work across dates gets a turn even on heavy news days.
+    dates.sort(key=lambda date: (day_priority.get(date, "~"), date))
     if not any_targets:
         print(f"SUMMARY: nothing to fill across {len(dates)} day(s)")
-        fill_content.record_heartbeat(dates[0], 0, 0, "github-actions")
+        if not no_push:
+            fill_content.record_heartbeat(dates[0], 0, 0, worker)
         return 0
 
     from playwright.sync_api import sync_playwright  # imported late: no-op runs skip it
 
-    total_filled = total_failed = 0
+    deadline = time.monotonic() + 600
+    total_filled = total_failed = publication_failures = 0
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         ctx = browser.new_context(user_agent=UA, locale="en-US",
@@ -256,23 +265,35 @@ def main() -> int:
         cookied: set = set()
         page = ctx.new_page()
         for date in dates:
-            f, x = _fill_one_day(page, ctx, cookied, date, no_push)
-            total_filled += f
-            total_failed += x
+            if time.monotonic() >= deadline:
+                print("Runtime budget reached; remaining dates deferred")
+                break
+            try:
+                f, x = _fill_one_day(page, ctx, cookied, date, no_push, deadline)
+                total_filled += f
+                total_failed += x
+            except Exception as exc:
+                publication_failures += 1
+                print(f"ERROR processing {date}: {exc}")
+            if not no_push:
+                fill_content.record_heartbeat(date, total_filled, total_failed, worker, state="running")
         browser.close()
 
-    fill_content.record_heartbeat(dates[0], total_filled, total_failed, "github-actions")
+    if not no_push:
+        fill_content.record_heartbeat(dates[0], total_filled, total_failed, worker,
+                                      state="failed" if publication_failures else "completed")
     print(f"SUMMARY: filled {total_filled}, {total_failed} still missing across {len(dates)} day(s)")
 
     # Source-health watchdog: after filling, check per-publisher coverage and
     # PROACTIVELY alert the owner (web push + in-app banner) if a subscriber cookie
     # expired or a fetch method collapsed. Best-effort — never fails the fill.
     try:
-        import monitor_sources
-        monitor_sources.main()
+        if not no_push:
+            import monitor_sources
+            monitor_sources.main()
     except Exception as e:  # noqa: BLE001
         print(f"(monitor_sources skipped: {e})")
-    return 0
+    return 1 if publication_failures else 0
 
 
 if __name__ == "__main__":

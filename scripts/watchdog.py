@@ -61,7 +61,7 @@ def main() -> int:
     hb = fill_content.read_heartbeat()
     if hb and hb.get("lastRun"):
         try:
-            last = datetime.strptime(hb["lastRun"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            last = datetime.fromisoformat(hb["lastRun"].replace("Z", "+00:00"))
             age_min = (now - last).total_seconds() / 60
         except Exception:
             age_min = 10**6

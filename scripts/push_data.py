@@ -2,7 +2,8 @@
 """Upsert local data files into the Supabase backend that the hosted app reads.
 
 Usage:
-  python3 scripts/push_data.py                 # push every data/*.json and data/weeks/*.json
+  python3 scripts/push_data.py --all-dates     # explicitly publish every local day/week
+  python3 scripts/push_data.py --registries    # explicitly publish research registries
   python3 scripts/push_data.py 2026-07-14      # push one day (plus its week file if present)
 
 The pipeline writes local JSON first (same schemas as before, documented in
@@ -10,6 +11,10 @@ CLAUDE.md), then runs this to publish. Uses the project's publishable key —
 the tables have open-write RLS by owner's choice (single-user app).
 """
 import json
+import argparse
+from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
+import publication
 import pathlib
 import sys
 import urllib.request
@@ -22,20 +27,10 @@ DATA = ROOT / "data"
 
 
 def upsert(table: str, row: dict) -> None:
-    req = urllib.request.Request(
-        f"{SUPABASE_URL}/rest/v1/{table}",
-        data=json.dumps(row).encode(),
-        headers={
-            "apikey": ANON_KEY,
-            "Authorization": f"Bearer {ANON_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        if resp.status not in (200, 201):
-            raise RuntimeError(f"{table}: HTTP {resp.status}")
+    doc = dict(row["data"])
+    if table not in ("days", "weeks"):
+        doc["generatedAt"] = row.get("updated_at")
+    publication.publish_document(table, str(row[publication.KEYS[table]]), doc)
 
 
 def push_day(path: pathlib.Path) -> None:
@@ -76,34 +71,81 @@ def push_keyed(path: pathlib.Path, table: str, doc_key: str, pk: str) -> None:
     print(f"pushed {len(entries)} {doc_key}")
 
 
-def main() -> None:
-    only = sys.argv[1] if len(sys.argv) > 1 else None
-    days = sorted(DATA.glob("????-??-??.json"))
-    weeks = sorted((DATA / "weeks").glob("????-??-??.json")) if (DATA / "weeks").exists() else []
+def publication_paths(data, only=None, all_dates=False):
     if only:
-        days = [p for p in days if p.stem == only]
-    for p in days:
-        push_day(p)
-    for p in weeks:
-        push_week(p)
-    players = DATA / "players.json"
-    if players.exists():
-        push_players(players)  # the roster rides along on every publish
-    terms = DATA / "terms.json"
-    if terms.exists():
-        push_terms(terms)  # the dictionary rides along on every publish
-    registries = [
-        (DATA / "threads.json", "threads", "threads", "slug"),
-        (DATA / "campaigns.json", "campaigns", "campaigns", "slug"),
-        (DATA / "events.json", "events", "events", "id"),
-        (DATA / "metrics.json", "metrics", "metrics", "id"),
-    ]
-    for path, table, doc_key, pk in registries:
-        if path.exists():
-            push_keyed(path, table, doc_key, pk)
-    if not days and not weeks and not players.exists() and not terms.exists() \
-            and not only and not any(p.exists() for p, *_ in registries):
-        print("nothing to push")
+        publication.validate_date(only)
+        day_path = data / f"{only}.json"
+        if not day_path.exists():
+            raise FileNotFoundError(day_path)
+        monday = date.fromisoformat(only)
+        monday -= timedelta(days=monday.weekday())
+        week = data / "weeks" / f"{monday.isoformat()}.json"
+        return [day_path], [week] if week.exists() else []
+    if all_dates:
+        return sorted(data.glob("????-??-??.json")), sorted((data / "weeks").glob("????-??-??.json"))
+    return [], []
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Publish explicitly scoped briefing data")
+    parser.add_argument("date", nargs="?", type=publication.validate_date)
+    parser.add_argument("--all-dates", action="store_true", help="Explicitly publish all local day/week files")
+    parser.add_argument("--registries", action="store_true", help="Explicitly publish local research registries")
+    args = parser.parse_args()
+    if args.date and args.all_dates:
+        parser.error("Use a date or --all-dates, not both")
+    legacy_default = not (args.date or args.all_dates or args.registries)
+    if legacy_default:
+        # Existing cloud routines invoke this without arguments. Keep that
+        # contract, but never republish historical files lying in the workspace.
+        args.date = datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        args.registries = True
+    days, weeks = publication_paths(DATA, args.date, args.all_dates)
+    registries = [("players", "slug"), ("terms", "slug"), ("threads", "slug"),
+                  ("campaigns", "slug"), ("events", "id"), ("metrics", "id")]
+    if legacy_default:
+        fresh = []
+        for table, pk in registries:
+            path = DATA / f"{table}.json"
+            if not path.exists():
+                continue
+            doc = json.loads(path.read_text())
+            generated = publication.timestamp(doc.get("generatedAt"))
+            if generated.astimezone(ZoneInfo("America/New_York")).date().isoformat() == args.date:
+                fresh.append((table, pk))
+            else:
+                print(f"skipped stale local registry {table}; use --registries explicitly if intended")
+        registries = fresh
+    # Validate the entire selected batch before its first remote mutation.
+    for table, paths in (("days", days), ("weeks", weeks)):
+        for path in paths:
+            doc = json.loads(path.read_text())
+            publication.validate_document(table, doc)
+            if doc["date" if table == "days" else "weekOf"] != path.stem:
+                raise ValueError("Filename/document date mismatch: " + str(path))
+    if args.registries:
+        for table, pk in registries:
+            path = DATA / f"{table}.json"
+            if not path.exists():
+                continue
+            doc = json.loads(path.read_text())
+            publication.timestamp(doc.get("generatedAt"))
+            entries = doc.get(table)
+            if not isinstance(entries, dict):
+                raise ValueError(table + " must be a keyed object")
+            for key, entity in entries.items():
+                if not key.strip():
+                    raise ValueError("Empty registry key")
+                publication.validate_document(table, entity)
+    for path in days:
+        push_day(path)
+    for path in weeks:
+        push_week(path)
+    if args.registries:
+        for table, pk in registries:
+            path = DATA / f"{table}.json"
+            if path.exists():
+                push_keyed(path, table, table, pk)
 
 
 if __name__ == "__main__":
