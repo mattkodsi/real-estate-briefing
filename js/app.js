@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v147";
+const APP_VERSION = "v148";
 const SUPABASE_URL = "https://uhwdnmbxiopfysodydty.supabase.co";
 const SUPABASE_KEY = "sb_publishable_LEQ5_-jjcRRl2p0wlaiXcw_RX4Wf8-y";
 // Mapbox public token — a pk.* token is meant to ship to browsers, but GitHub's
@@ -1504,7 +1504,7 @@ function storyChips(story, date) {
   // timeline (stop the card's own click so it doesn't open the reader instead)
   if (story.thread) {
     const arc = chip("🧵 Tale", "chip-arc");
-    arc.setAttribute("role", "link"); c.tabIndex = 0;
+    arc.setAttribute("role", "link"); arc.tabIndex = 0;
     arc.addEventListener("click", (e) => {
       e.preventDefault(); e.stopPropagation();
       location.hash = `/thread/${story.thread}`;
@@ -1517,7 +1517,7 @@ function storyChips(story, date) {
     const can = canopyForStory(state.campaigns, story, date);
     if (can) {
       const cc = chip("🌳 " + (can.title || "Saga"), "chip-canopy");
-      cc.setAttribute("role", "link"); c.tabIndex = 0;
+      cc.setAttribute("role", "link"); cc.tabIndex = 0;
       cc.addEventListener("click", (e) => {
         e.preventDefault(); e.stopPropagation();
         location.hash = `/campaign/${can.slug}`;
