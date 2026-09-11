@@ -8,7 +8,7 @@ The v148 visual changes were not acceptable to the owner. Passing tests did not 
 - Replace the collapsed “Today's big picture” block with a visible “In brief” list of the five leading stories. No native disclosure marker or extra navigation row above it.
 - Restore Settings through the masthead and Saved through the search control. The search control clears a previous query when reopened.
 - Keep chrome anchored while scrolling. The prior override set `transform:none`, removing the bottom bar's `translateX(-50%)` centering and shifting it sideways.
-- Keep a compact 48px single-row navigation bar on every phone; use Index and Stories labels at narrow widths. The narrowest header places the date on its own compact row. Respect horizontal safe-area insets in landscape.
+- Keep a compact 48px single-row navigation bar on every phone; use Index and Stories labels at narrow widths. The wordmark, date cycler and dashboard buttons also remain on one row; narrow phones omit the visible year while retaining the full date in its accessible label. Respect horizontal safe-area insets in landscape.
 - Restore Mapbox Satellite Streets as the map style, retaining lazy loading.
 - Preserve full-page sliding between articles. Adjacent opaque pages are prepared between gestures; both pages follow the finger at 1:1 displacement. Release settles from the current offset in 80–220ms according to remaining distance and velocity. Cancellation returns to the same story. There is no fade or static article-swap animation.
 - Keep the reader frame opaque and remove temporary panels after completion, cancellation, exit and reduced-motion navigation.

@@ -3730,19 +3730,24 @@ body.reader-open #bn-layer { visibility:hidden; }
 
 #reader.reader-swiping { scrollbar-width:none; }
 #reader.reader-swiping::-webkit-scrollbar { display:none; }
-/* Narrow phones get an intentional two-row header; nothing clips off-screen. */
+/* Keep all phone chrome in one row; shorten labels as space narrows. */
 :root { --pad:max(clamp(16px,4.5vw,28px),env(safe-area-inset-left),env(safe-area-inset-right)); }
 :root[data-look="updated"] #bottom-nav { width:min(var(--page),calc(100vw - max(12px,env(safe-area-inset-left),env(safe-area-inset-right)) - max(12px,env(safe-area-inset-left),env(safe-area-inset-right)))); }
 :root[data-look="updated"] #bottom-nav a { font-size:clamp(8px,2.7vw,10px); }
 @media (max-width:350px) {
-  .masthead-row { display:grid; grid-template-columns:1fr auto auto auto; align-items:center; gap:0 4px; }
-  .masthead-right { display:contents; }
-  .wordmark { grid-column:1; grid-row:1; }
-  #bell-btn { grid-column:2; grid-row:1; }
-  #search-btn { grid-column:3; grid-row:1; }
-  #profile-btn { grid-column:4; grid-row:1; }
-  .date-nav { grid-column:1 / -1; grid-row:2; justify-self:center; }
+  .wordmark { font-size:15px; }
+  .masthead-row { gap:2px; }
+  .masthead-right { gap:0; }
+  .masthead .icon-btn { width:26px; height:30px; }
+  .date-nav { gap:0; }
+  .date-nav .nav-arrow { padding:6px 2px; margin:0; font-size:16px; }
+  #current-date { min-width:0; padding:2px; font-size:10.5px; }
   .reader-bar-right { gap:6px; }
+}
+.date-compact { display:none; }
+@media (max-width:350px) {
+  #current-date .date-full { display:none; }
+  #current-date .date-compact { display:inline; }
 }
 
 .nav-label-short { display:none; }

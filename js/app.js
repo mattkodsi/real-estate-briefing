@@ -1268,7 +1268,11 @@ async function renderBriefing(date) {
   state.currentDate = date;
 
   const i = state.dates.indexOf(date);
-  $("current-date").textContent = formatDate(date, { month: "short", day: "numeric", year: "numeric" });
+  const dateLabel=formatDate(date,{month:"short",day:"numeric",year:"numeric"});
+  const fullDate=document.createElement('span');fullDate.className='date-full';fullDate.textContent=dateLabel;
+  const compactDate=document.createElement('span');compactDate.className='date-compact';compactDate.textContent=formatDate(date,{month:'short',day:'numeric'});
+  $('current-date').replaceChildren(fullDate,compactDate);
+  $('current-date').setAttribute('aria-label',dateLabel+'. View briefing history');
   $("prev-day").disabled = i <= 0;
   $("next-day").disabled = i >= state.dates.length - 1;
 
