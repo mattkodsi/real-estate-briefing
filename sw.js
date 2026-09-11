@@ -1,20 +1,20 @@
 /* Service worker: offline-capable app shell + last-known data cache + web push.
    Bump VERSION (and the ?v= on assets in index.html) on every deploy so old
    caches are dropped and clients can never pair stale code with new data. */
-const VERSION = "v151";
+const VERSION = "v152";
 const SHELL = "shell-" + VERSION;
 const DATA = "briefing-public-data-v1";
 
 const SHELL_ASSETS = [
   "./",
   "./index.html",
-  "./css/style.css?v=151",
-  "./js/app.js?v=151",
-  "./js/data-client.js?v=151",
-  "./js/briefing-core.js?v=151",
-  "./js/overlay-focus.js?v=151",
-  "./js/profile-store.js?v=151",
-  "./manifest.webmanifest?v=151",
+  "./css/style.css?v=152",
+  "./js/app.js?v=152",
+  "./js/data-client.js?v=152",
+  "./js/briefing-core.js?v=152",
+  "./js/overlay-focus.js?v=152",
+  "./js/profile-store.js?v=152",
+  "./manifest.webmanifest?v=152",
   "./icon.svg",
 ];
 
