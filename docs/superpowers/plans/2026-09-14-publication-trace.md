@@ -6,10 +6,12 @@
 
 **Scope:** Add instrumentation only. Do not silently repair unrelated audit defects or claim old history is complete. No raw emails/article bodies/source URLs/credentials in event metadata. Telemetry outage must not abort publication; local spool and warnings expose missing remote logs. Database publication observations are atomic with the write, but fail open on telemetry-only errors. Abrupt death leaves an unfinished phase, never a fabricated success.
 
-- [ ] Write behavioral tests for private SQL log, direct writes/rollback/no-op, worker error paths, durable replay/idempotency, and metadata safety.
-- [ ] Add migration and authenticated bounded ingest/report endpoint; instrument standby without changing its decisions.
-- [ ] Add Python trace library/CLI; instrument routines, extraction attempts, publication validation/conflicts/noops and workflow setup outcomes.
-- [ ] Document the required external routine contract and actual coverage; preserve no-window Mini compatibility.
+- [x] Write behavioral tests for private SQL log, direct writes/rollback/no-op, worker error paths, durable replay/idempotency, and metadata safety.
+- [x] Add migration and authenticated bounded ingest/report endpoint; instrument standby without changing its decisions.
+- [x] Add Python trace library/CLI; instrument routines, extraction attempts, publication validation/conflicts/noops and workflow setup outcomes.
+- [x] Document the required external routine contract and actual coverage; preserve no-window Mini compatibility.
 - [ ] Run complete regression tests, review code, canary-test additive database/endpoint changes, merge and verify deployment/worker evidence where authorized and available.
 
 Production deployment must distinguish code shipped, database installed, instrumentation observed, and external email phases verified. No synthetic receipt times or retrospective completion claims.
+
+Verification: 104 JS/PGlite +103 Python tests; GitHub run34872594227 passed for implementation77e85a5. DB installed; authenticated endpoint 200/anonymous401; real DB update observed; no-day hosted canary traced. External email/AI routine coverage remains unverified.

@@ -76,3 +76,11 @@ Reports are bounded to 500 rows per page. Follow `next_cursor` / `NEXT CURSOR` b
 5. Verify an actual scheduled worker run and, separately, an external newsletter run from email read through publication. Keep coverage unverified until those events arrive.
 
 No frontend release/version change is needed. The 16-item repair log is not marked resolved by adding instrumentation.
+
+### September 14 rollout evidence
+
+- Code `77e85a5`: 104 JavaScript/PGlite/handler checks and 103 Python tests passed locally; GitHub Regression checks including browser setup smoke passed in run 34872594227.
+- Private database migration applied. Real September 14 story update, retry/backoff and worker observations arrived at 17:00 UTC; the older worker had no correlation headers, correctly recorded as unknown producer rather than guessed.
+- `pipeline-trace` v1, `fill-content` v8 and `push-dispatch` v9 deployed. Authenticated canary ingest/report returned 200; anonymous report returned 401. The actual canary is labeled trace-verification, not an email/article delivery.
+- A deliberate no-day standby check for 1900-01-01 returned 200 without publishing a day; its start/skip events identify Supabase, method, matching spans and duration. This verifies hosted handler logging without sending a notification or altering article data.
+- Remaining: observe a new GitHub worker invocation on the shipped code; verify an external newsletter routine uses the new contract, including truthful Gmail-read and actual AI provider/model events. Code/instruction deployment alone is not that proof. Do not mark CRE-013 or the overall audit complete on these results.
