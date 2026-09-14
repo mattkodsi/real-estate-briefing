@@ -9,6 +9,7 @@ main article container and strips attributes except img src/alt. Used by the dai
 scheduled task to populate each story's "content" field for the in-app reader.
 """
 from content_quality import assess_content, GATE, text_of
+import pipeline_trace as trace
 import json
 import os
 import re
@@ -248,6 +249,7 @@ def _looks_blocked(html: str) -> bool:
            ("enable javascript and cookies to continue" in low)
 
 
+@trace.traced('article.direct_http',method='direct-http')
 def _fetch_direct(url: str) -> tuple[str, str]:
     headers = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
                "Accept-Language": "en-US,en;q=0.9"}
@@ -260,6 +262,7 @@ def _fetch_direct(url: str) -> tuple[str, str]:
         return resp.read().decode("utf-8", errors="replace"), resp.geturl()
 
 
+@trace.traced('article.proxy_http',method='supabase-fetch-proxy')
 def _fetch_via_proxy(url: str) -> tuple[str, str]:
     """Fetch through the Supabase fetch-proxy edge function — works where the
     run environment's egress is blocked, or where a site rate-limits our IP but
@@ -284,11 +287,14 @@ def _get_html(url: str) -> tuple[str, str]:
         html, final = _fetch_direct(url)
         if not _looks_blocked(html):
             return html, final
-    except Exception:
+        trace.emit('article.fallback','started',details={'method':'supabase-fetch-proxy','retry_reason':'bot_wall'})
+    except Exception as exc:
+        trace.emit('article.fallback','started',details={'method':'supabase-fetch-proxy','retry_reason':'direct_failed','error_type':type(exc).__name__})
         pass  # egress blocked, timeout, 403 — try the proxy
     return _fetch_via_proxy(url)
 
 
+@trace.traced('article.parse',method='html-parser')
 def extract_from_html(html: str, url: str, final_url: str | None = None) -> dict:
     """Extract reader content from already-fetched page HTML. Shared by the
     HTTP path (extract below) and the headless-browser filler
@@ -396,6 +402,7 @@ def is_dead_tracking_wrapper(url: str) -> bool:
     return host in ("links.bisnow.com", "link.mail.beehiiv.com")
 
 
+@trace.traced('article.http_extract',method='http-fallback-chain')
 def extract(url: str) -> dict:
     if is_dead_tracking_wrapper(url):
         return {"ok": False, "words": 0, "notFound": True, "deadWrapper": True,
@@ -450,8 +457,14 @@ def title_mismatch(story_title: str, res: dict) -> bool:
     return not any(re.search(r"\b" + re.escape(t) + r"\b", hay) for t in toks)
 
 
-if __name__ == "__main__":
+@trace.traced_main("article-cli")
+def main():
     try:
         print(json.dumps(extract(sys.argv[1])))
     except Exception as e:  # noqa: BLE001 - report any fetch failure as not-ok
+        trace.outcome("degraded")
         print(json.dumps({"ok": False, "error": str(e)}))
+
+
+if __name__ == "__main__":
+    main()

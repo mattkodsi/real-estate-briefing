@@ -27,6 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Record routine start
+        continue-on-error: true
+        env:
+          AUDIT_PIPELINE_SECRET: ${{ secrets.AUDIT_PIPELINE_SECRET }}
+        run: |
+          TRACE_RUN_ID=$(python3 scripts/pipeline_trace.py begin --producer github-fill)
+          echo "BRIEFING_RUN_ID=$TRACE_RUN_ID" >> "$GITHUB_ENV"
+
       - uses: ./.github/actions/setup-fill-browser
         id: browser
 
@@ -57,3 +65,17 @@ jobs:
           import fill_content
           fill_content.record_heartbeat(os.environ.get("FILL_DATE") or fill_content._today(), 0, 1, "github-actions", state="failed")
           PY
+
+      - name: Record routine outcome and replay buffered trace
+        if: always()
+        continue-on-error: true
+        env:
+          AUDIT_PIPELINE_SECRET: ${{ secrets.AUDIT_PIPELINE_SECRET }}
+          TRACE_OUTCOME: ${{ job.status }}
+        run: |
+          if [ -n "$BRIEFING_RUN_ID" ]; then
+            STATUS=failed
+            if [ "$TRACE_OUTCOME" = success ]; then STATUS=completed; fi
+            python3 scripts/pipeline_trace.py end --run-id "$BRIEFING_RUN_ID" --producer github-fill --status "$STATUS"
+          fi
+          python3 scripts/pipeline_trace.py flush

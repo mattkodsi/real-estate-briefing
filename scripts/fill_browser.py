@@ -20,6 +20,7 @@ Usage:
 
 Requires:  pip install playwright && playwright install chromium
 """
+import pipeline_trace as trace
 import json
 import copy
 import argparse
@@ -65,6 +66,7 @@ def _cookies_for(url: str):
     return out
 
 
+@trace.traced('article.browser_navigation',method='playwright-chromium')
 def fetch_with_browser(page, url: str) -> tuple[str, str]:
     """Navigate a real browser to the URL, wait out any JS challenge, and
     return (rendered_html, final_url_after_redirects)."""
@@ -119,110 +121,111 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
         if deadline is not None and time.monotonic() >= deadline:
             print("  Runtime budget reached; unattempted articles remain for next run")
             break
-        sid = s.get("id")
-        s["fillAttemptedAt"] = publication.utcnow()
-        if not s.get("url"):
-            if fill_content._try_coverage(s):
+        with trace.phase("article.attempt",entity_type="story",entity_key=date+"/"+str(s.get("id"))):
+            sid = s.get("id")
+            s["fillAttemptedAt"] = publication.utcnow()
+            if not s.get("url"):
+                if fill_content._try_coverage(s):
+                    filled.append(sid)
+                    print(f"  ✓ {sid:<40} recovered from alternate coverage")
+                else:
+                    failed.append((sid, "missing_source_url"))
+                continue
+            # a fabricated Bisnow short-link (descriptive slug) 404s forever — drop the
+            # dead url so the app shows summary-only instead of linking to a 404
+            if fetch_article.is_fabricated_bisnow_shortlink(s.get("url") or ""):
+                s.pop("url", None)
+                s.pop("sourceBlocked", None)
+                changed_urls += 1
+                print(f"  ⤫ {sid:<40} dropped fabricated Bisnow short-link")
+                continue
+            try:
+                dom = _registrable(urllib.parse.urlparse(s["url"]).netloc)
+                if dom not in cookied:
+                    cookies = _cookies_for(s["url"])
+                    if cookies:
+                        ctx.add_cookies(cookies)
+                    cookied.add(dom)
+                html, final = fetch_with_browser(page, s["url"])
+                res = fetch_article.extract_from_html(html, s["url"], final)
+                # canonical URL: a tracking wrapper that resolved to a real page
+                if final and fill_content._is_wrapper(s["url"]) and not fill_content._is_wrapper(final):
+                    s["url"] = fill_content._clean_url(final)
+                    changed_urls += 1
+                have = fill_content._words(s.get("content"))
+                ok = res.get("ok")
+                mism = ok and fetch_article.title_mismatch(s.get("title", ""), res)
+                if ok and not mism:
+                    got_image = False
+                    if not s.get("image") and res.get("image"):
+                        s["image"] = res["image"]
+                        got_image = True
+                    if not fill_content.assess_content(s.get("content"))["ready"] or res["words"] > have:
+                        s["content"] = res["html"]
+                        s.pop("sourceBlocked", None)
+                        filled.append(sid)
+                        print(f"  ✓ {sid:<40} {res['words']} words")
+                    elif got_image:
+                        # text was already complete (e.g. from the email body); we only
+                        # backfilled the missing hero image — still a change to publish
+                        s.pop("sourceBlocked", None)
+                        filled.append(sid)
+                        print(f"  🖼 {sid:<40} image backfilled ({have} words kept)")
+                    elif not s.get("image"):
+                        # clean fetch, no hero at source → stop re-fetching it just for art
+                        s["imageChecked"] = True
+                        print(f"  · {sid:<40} no image at source")
+                elif mism:
+                    # url pointed at the wrong article — leave a tap-through, don't
+                    # show mismatched content under this headline
+                    s["sourceBlocked"] = True
+                    failed.append((sid, "headline/article mismatch — url likely mis-paired"))
+                    print(f"  ⤫ {sid:<40} headline/article mismatch")
+                elif res.get("premiumData"):
+                    # TRD Data ($/yr tier) — no session unlocks it; clean tap-through
+                    s["sourceBlocked"] = True
+                    failed.append((sid, "TRD Data (premium tier)"))
+                    print(f"  ⤫ {sid:<40} TRD Data (premium tier)")
+                elif fill_content.assess_content(s.get("content"))["ready"]:
+                    # here only for a missing image and the fetch missed (bot wall / error):
+                    # the story's text is fine — never flag it blocked, just retry next run
+                    print(f"  · {sid:<40} image fetch missed (text intact)")
+                else:
+                    # Playwright got blocked/short. Before giving up, try the plain
+                    # HTTP + Supabase-proxy path (fetch_article.extract): sites like TRD
+                    # challenge the headless BROWSER from GitHub's IPs but serve the
+                    # article to a plain fetch through the proxy's clean egress, so the
+                    # "simpler" path recovers what the browser can't.
+                    alt = None
+                    try:
+                        alt = fetch_article.extract(s["url"])
+                    except Exception:  # noqa: BLE001
+                        alt = None
+                    if (alt and alt.get("ok")
+                            and (not fill_content.assess_content(s.get("content"))["ready"] or fill_content._words(alt.get("html")) > have)
+                            and not fetch_article.title_mismatch(s.get("title", ""), alt)):
+                        s["content"] = alt["html"]
+                        if not s.get("image") and alt.get("image"):
+                            s["image"] = alt["image"]
+                        s.pop("sourceBlocked", None)
+                        filled.append(sid)
+                        print(f"  ✓ {sid:<40} {alt['words']} words (http fallback)")
+                    else:
+                        s["sourceBlocked"] = True  # app: card taps through to the source
+                        failed.append((sid, f"{res.get('words', 0)} words"
+                                            + (" (challenge held)" if res.get("blocked") else "")))
+                        print(f"  ✗ {sid:<40} {res.get('words', 0)} words")
+            except Exception as e:  # noqa: BLE001 - one bad page never stops the loop
+                failed.append((sid, str(e)[:70]))
+                print(f"  ✗ {sid:<40} {str(e)[:70]}")
+
+            if not fill_content.assess_content(s.get("content"))["ready"] and fill_content._try_coverage(s):
+                failed = [item for item in failed if item[0] != sid]
                 filled.append(sid)
                 print(f"  ✓ {sid:<40} recovered from alternate coverage")
-            else:
-                failed.append((sid, "missing_source_url"))
-            continue
-        # a fabricated Bisnow short-link (descriptive slug) 404s forever — drop the
-        # dead url so the app shows summary-only instead of linking to a 404
-        if fetch_article.is_fabricated_bisnow_shortlink(s.get("url") or ""):
-            s.pop("url", None)
-            s.pop("sourceBlocked", None)
-            changed_urls += 1
-            print(f"  ⤫ {sid:<40} dropped fabricated Bisnow short-link")
-            continue
-        try:
-            dom = _registrable(urllib.parse.urlparse(s["url"]).netloc)
-            if dom not in cookied:
-                cookies = _cookies_for(s["url"])
-                if cookies:
-                    ctx.add_cookies(cookies)
-                cookied.add(dom)
-            html, final = fetch_with_browser(page, s["url"])
-            res = fetch_article.extract_from_html(html, s["url"], final)
-            # canonical URL: a tracking wrapper that resolved to a real page
-            if final and fill_content._is_wrapper(s["url"]) and not fill_content._is_wrapper(final):
-                s["url"] = fill_content._clean_url(final)
-                changed_urls += 1
-            have = fill_content._words(s.get("content"))
-            ok = res.get("ok")
-            mism = ok and fetch_article.title_mismatch(s.get("title", ""), res)
-            if ok and not mism:
-                got_image = False
-                if not s.get("image") and res.get("image"):
-                    s["image"] = res["image"]
-                    got_image = True
-                if not fill_content.assess_content(s.get("content"))["ready"] or res["words"] > have:
-                    s["content"] = res["html"]
-                    s.pop("sourceBlocked", None)
-                    filled.append(sid)
-                    print(f"  ✓ {sid:<40} {res['words']} words")
-                elif got_image:
-                    # text was already complete (e.g. from the email body); we only
-                    # backfilled the missing hero image — still a change to publish
-                    s.pop("sourceBlocked", None)
-                    filled.append(sid)
-                    print(f"  🖼 {sid:<40} image backfilled ({have} words kept)")
-                elif not s.get("image"):
-                    # clean fetch, no hero at source → stop re-fetching it just for art
-                    s["imageChecked"] = True
-                    print(f"  · {sid:<40} no image at source")
-            elif mism:
-                # url pointed at the wrong article — leave a tap-through, don't
-                # show mismatched content under this headline
-                s["sourceBlocked"] = True
-                failed.append((sid, "headline/article mismatch — url likely mis-paired"))
-                print(f"  ⤫ {sid:<40} headline/article mismatch")
-            elif res.get("premiumData"):
-                # TRD Data ($/yr tier) — no session unlocks it; clean tap-through
-                s["sourceBlocked"] = True
-                failed.append((sid, "TRD Data (premium tier)"))
-                print(f"  ⤫ {sid:<40} TRD Data (premium tier)")
-            elif fill_content.assess_content(s.get("content"))["ready"]:
-                # here only for a missing image and the fetch missed (bot wall / error):
-                # the story's text is fine — never flag it blocked, just retry next run
-                print(f"  · {sid:<40} image fetch missed (text intact)")
-            else:
-                # Playwright got blocked/short. Before giving up, try the plain
-                # HTTP + Supabase-proxy path (fetch_article.extract): sites like TRD
-                # challenge the headless BROWSER from GitHub's IPs but serve the
-                # article to a plain fetch through the proxy's clean egress, so the
-                # "simpler" path recovers what the browser can't.
-                alt = None
-                try:
-                    alt = fetch_article.extract(s["url"])
-                except Exception:  # noqa: BLE001
-                    alt = None
-                if (alt and alt.get("ok")
-                        and (not fill_content.assess_content(s.get("content"))["ready"] or fill_content._words(alt.get("html")) > have)
-                        and not fetch_article.title_mismatch(s.get("title", ""), alt)):
-                    s["content"] = alt["html"]
-                    if not s.get("image") and alt.get("image"):
-                        s["image"] = alt["image"]
-                    s.pop("sourceBlocked", None)
-                    filled.append(sid)
-                    print(f"  ✓ {sid:<40} {alt['words']} words (http fallback)")
-                else:
-                    s["sourceBlocked"] = True  # app: card taps through to the source
-                    failed.append((sid, f"{res.get('words', 0)} words"
-                                        + (" (challenge held)" if res.get("blocked") else "")))
-                    print(f"  ✗ {sid:<40} {res.get('words', 0)} words")
-        except Exception as e:  # noqa: BLE001 - one bad page never stops the loop
-            failed.append((sid, str(e)[:70]))
-            print(f"  ✗ {sid:<40} {str(e)[:70]}")
-
-        if not fill_content.assess_content(s.get("content"))["ready"] and fill_content._try_coverage(s):
-            failed = [item for item in failed if item[0] != sid]
-            filled.append(sid)
-            print(f"  ✓ {sid:<40} recovered from alternate coverage")
-
     for story in targets:
         if story.get("fillAttemptedAt") != next((old.get("fillAttemptedAt") for old in base.get("stories", []) if old.get("id") == story.get("id")), None):
+            trace.emit("article.result", "failed" if any(item[0]==story.get("id") for item in failed) else "completed",entity_type="story",entity_key=date+"/"+str(story.get("id")))
             fill_content.stamp_content_status(story, "fetch_failed" if any(item[0] == story.get("id") for item in failed) else None)
 
     # Persist status/image-check-only changes too. Failure propagates to the
@@ -241,6 +244,7 @@ def _fill_one_day(page, ctx, cookied: set, date: str, no_push: bool, deadline: f
     return len(filled), len(failed)
 
 
+@trace.traced_main('browser-worker')
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("date", nargs="?", type=publication.validate_date)

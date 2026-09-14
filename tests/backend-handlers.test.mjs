@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {stripTypeScriptTypes} from 'node:module';
 import {checkedFetch} from '../supabase/functions/_shared/backend-policy.mjs';
-async function load(name,fetcher){
+async function load(name,fetcher,hour=12){
  let handler;globalThis.Deno={env:{get:key=>({SUPABASE_URL:'https://database.invalid',SUPABASE_SERVICE_ROLE_KEY:'fixture-service',AUDIT_PIPELINE_SECRET:'fixture-owner'}[key])},serve:fn=>{handler=fn;}};
  globalThis.fetch=fetcher;
  const base=new URL(`../supabase/functions/${name}/index.ts`,import.meta.url);
  let source=(await readFile(base,'utf8')).replace(/import "jsr:[^"]+";/g,'');
  if(name==='push-dispatch') {
   source=source.replace(/import \* as webpush from "jsr:[^"]+";/, 'const webpush={importVapidKeys:async()=>({}),ApplicationServer:{new:async()=>({subscribe:()=>({pushTextMessage:async()=>{throw new Error("Unexpected push in test");}})})}};');
-  source=source.replace('const { date: today, hour } = nowET();','const {date:today,hour}={date:"2026-09-11",hour:12};');
+  source=source.replace('const { date: today, hour } = nowET();',`const {date:today,hour}={date:"2026-09-11",hour:${hour}};`);
  }
  source=source.replace(/import (['"])(\.\.[^'"]+)\1/g,(_,q,path)=>'import '+q+new URL(path,base).href+q);
  source=source.replace(/from (['"])(\.\.[^'"]+)\1/g,(_,q,path)=>'from '+q+new URL(path,base).href+q);
@@ -72,6 +72,7 @@ test('synthetic handlers: no real services or credentials',async t=>{
  await t.test('breaking/watch dedupe is per profile, preserving watch-only readers',async()=>{
   const queued=[];const story={id:'story-1',pushEligible:true,title:'New development',summary:'A complete summary.'};
   const handler=await load('push-dispatch',async(url,init)=>{
+   assert.ok(init.headers['x-briefing-run-id']);assert.equal(init.headers['x-briefing-producer'],'supabase-push-dispatch');
    if(url.includes('/rpc/')){
     const name=url.split('/rpc/')[1],body=JSON.parse(init.body);queued.push({name,body});
     return reply(name==='audit_discover_stories'?['2026-09-11:story-1']:name==='audit_claim_push'?[]:null);
@@ -86,8 +87,34 @@ test('synthetic handlers: no real services or credentials',async t=>{
   });
   const response=await handler(new Request('https://example.invalid',{headers:{'x-audit-secret':'fixture-owner'}}));
   assert.equal(response.status,200);
+  const events=queued.filter(x=>x.name==='pipeline_record_events').flatMap(x=>x.body.p_events);
+  for(const stage of ['run','notification.discover','notification.enqueue','notification.queue-drain']) {
+   assert.ok(events.some(e=>e.stage===stage && e.status==='started'),stage);assert.ok(events.some(e=>e.stage===stage && e.status==='completed'),stage);
+  }
+  assert.equal(new Set(events.map(e=>e.run_id)).size,1);assert.ok(events.every(e=>!JSON.stringify(e).includes('New development')));
   assert.deepEqual(queued.find(x=>x.name==='audit_enqueue_push').body.p_profiles,['breaking-reader']);
   assert.deepEqual(queued.filter(x=>x.name==='audit_enqueue_watch').map(x=>x.body.p_profile),['watch-reader']);
+ });
+ await t.test('dispatch quiet hours and missing setup preserve responses and record skip',async()=>{
+  for(const mode of ['quiet','setup']) {
+   const events=[];
+   const handler=await load('push-dispatch',async(url,init)=>{
+    if(url.includes('pipeline_record_events')){events.push(...JSON.parse(init.body).p_events);return reply(1);}
+    if(mode==='quiet')throw Error('Quiet run must not access notification state');
+    return reply([]);
+   },mode==='quiet'?23:12);
+   const data=await (await handler(new Request('https://example.invalid',{headers:{'x-audit-secret':'fixture-owner'}}))).json();
+   assert.deepEqual(data,mode==='quiet'?{ok:true,quiet:true}:{ok:true,note:'vapid not set up'});
+   assert.equal(events.at(-1).status,'skipped');assert.equal(events[0].details.span_id,events.at(-1).details.span_id);
+  }
+ });
+ await t.test('dispatch log failures retain original response and error handling',async()=>{
+  const oldWarn=console.warn;console.warn=()=>{};
+  try {
+   const handler=await load('push-dispatch',async(url)=>{throw Error(url.includes('pipeline_record_events')?'trace unavailable':'original failure');});
+   const response=await handler(new Request('https://example.invalid',{headers:{'x-audit-secret':'fixture-owner'}}));
+   assert.equal(response.status,500);assert.deepEqual(await response.json(),{ok:false,error:'Error: original failure'});
+  } finally {console.warn=oldWarn;}
  });
  await t.test('checked fetch rejects failed HTTP writes',async()=>{
   await assert.rejects(()=>checkedFetch('https://example.invalid',{},async()=>reply({},500)),/500/);

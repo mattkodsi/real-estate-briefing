@@ -21,6 +21,7 @@ Exit status is 0 on a clean run; it prints a per-story report and a summary
 line like "filled 14/16 · 2 failed (ids…)" so the routine can fold any
 persistent failure into the day's notes.
 """
+import pipeline_trace as trace
 import json
 import copy
 import argparse
@@ -135,17 +136,21 @@ def record_heartbeat(date: str, filled: int, failed: int, via: str, state: str =
     status row so the cloud routine and the Mac watchdog can detect a dead
     primary (GitHub Actions) and take over. Never fatal."""
     import os
+    if failed and state=="completed": trace.outcome("degraded")
+    trace.emit("worker.heartbeat","degraded" if failed and state=="completed" else state,entity_type="days",entity_key=date,details={"filled":filled,"failed":failed})
+    trace.flush()
     worker = via or ("github-actions" if os.environ.get("GITHUB_ACTIONS") == "true" else "local")
     row = {"id": "fill_" + worker, "data": {
         "lastRun": publication.utcnow(), "date": date,
         "filled": filled, "failed": failed, "via": worker, "state": state,
         "runId": os.environ.get("GITHUB_RUN_ID"),
+        "traceRunId": trace.headers().get("x-briefing-run-id"),
     }}
     try:
         req = urllib.request.Request(
             f"{SUPABASE_URL}/rest/v1/publication_workers", data=json.dumps(row).encode(),
             headers={"apikey": ANON_KEY, "Authorization": f"Bearer {ANON_KEY}",
-                     "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"},
+                     "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates", **trace.headers()},
             method="POST")
         urllib.request.urlopen(req, timeout=15).read()
     except Exception as exc:
@@ -345,7 +350,9 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_secon
             sid = s.get("id")
             attempted_ids.add(sid)
             s["fillAttemptedAt"] = publication.utcnow()
-            status, detail = _try_story(s)
+            with trace.phase("article.attempt",entity_type="story",entity_key=day["date"]+"/"+str(sid),details={"attempt":2 if tag else 1}):
+                status, detail = _try_story(s)
+                trace.emit("article.result", "completed" if status in ("filled","imageonly","nochange") else "failed",details={"reason":status})
             stamp_content_status(s, None if status in ("filled", "imageonly", "nochange") else status)
             if status == "filled":
                 filled.append(sid)
@@ -419,6 +426,7 @@ def fill_day(day: dict, throttle: float = 1.5, retry_wait: float = 25, max_secon
             "dropped": dropped, "skipped": skipped, "attempted": len(attempted_ids)}
 
 
+@trace.traced_main('http-worker')
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("date", nargs="?", type=publication.validate_date, default=_today())

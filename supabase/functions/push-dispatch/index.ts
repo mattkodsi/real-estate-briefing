@@ -12,6 +12,7 @@
 // only after provider acceptance. Explicit failures retry with backoff. Quiet overnight: nothing sends
 // 9 PM–7 AM ET; unlogged items simply go out on the first morning run.
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createPipelineTrace } from "../_shared/pipeline-trace.mjs";
 import { denyUnlessAuthorized } from "../_shared/audit-auth.mjs";
 import { pushCopy, briefingCopy, discoveryDates, checkedFetch, isPushEligible } from "../_shared/backend-policy.mjs";
 import { drainDeliveries } from "../_shared/audit-delivery.mjs";
@@ -23,23 +24,17 @@ const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const HEADERS = { "Content-Type": "application/json" };
 const CONTACT = "mailto:mfkodsi@gmail.com";
 
-async function sb(path: string, init: RequestInit = {}): Promise<Response> {
+async function databaseRequest(path: string, init: RequestInit = {}, correlation: Record<string,string> = {}): Promise<Response> {
   const response = await checkedFetch(`${SB_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
                "Content-Type": "application/json", Prefer: "resolution=merge-duplicates",
-               ...(init.headers || {}) },
+               ...(init.headers || {}), ...correlation },
   });
   if (!response.ok) throw new Error(`Database request failed (${response.status})`);
   return response;
 }
-async function rpc(name: string, body: Record<string, unknown>): Promise<any> {
-  const response = await sb(`rpc/${name}`, {method:"POST",body:JSON.stringify(body)});
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
-}
-
-async function loadServer(): Promise<InstanceType<typeof webpush.ApplicationServer> | null> {
+async function loadServer(sb: typeof databaseRequest): Promise<InstanceType<typeof webpush.ApplicationServer> | null> {
   const rows = await (await sb("secrets?id=eq.vapid&select=data")).json();
   const data = rows?.[0]?.data;
   if (!data?.publicJwk || !data?.privateJwk) return null; // push-send ?setup=1 not run yet
@@ -61,10 +56,43 @@ function nowET(): { date: string; hour: number } {
 
 Deno.serve(async (req: Request) => {
   const denied = denyUnlessAuthorized(req); if (denied) return denied;
+  const runId = crypto.randomUUID();
+  const sb = (path: string, init: RequestInit = {}) => databaseRequest(path, init, {
+    "x-briefing-run-id": runId, "x-briefing-producer": "supabase-push-dispatch",
+  });
+  const trace = createPipelineTrace({sb,producer:"supabase-push-dispatch",runId});
+  const startedAt = Date.now();
+  const runSpan = crypto.randomUUID();
+  const runEntity = {details:{span_id:runSpan,artifact_type:"notification-dispatch",trigger:"scheduler-or-owner"}};
+  let outcome = "completed", phase = "dispatched";
+  const traced = async (stage:string,method:string,action:()=>Promise<any>) => {
+    const entity = {details:{span_id:crypto.randomUUID(),parent_span_id:runSpan,method,artifact_type:"notification-dispatch"}};
+    const started = Date.now();
+    await trace.emit(stage,"started",entity);
+    try {
+      const result = await action();
+      await trace.emit(stage,stage === "notification.queue-drain" && result.failed ? "degraded" : "completed",{...entity,details:{...entity.details,duration_ms:Date.now()-started,...(stage === "notification.queue-drain" ? {success_count:result.sent,failure_count:result.failed,skipped_count:result.pruned} : {})}});
+      return result;
+    } catch(error) {
+      await trace.emit(stage,"failed",{...entity,details:{...entity.details,duration_ms:Date.now()-started}});
+      throw error;
+    }
+  };
+  const rpc = async (name:string,body:Record<string,unknown>) => {
+    const action = async () => {
+      const response = await sb(`rpc/${name}`,{method:"POST",body:JSON.stringify(body)});
+      const text = await response.text();return text ? JSON.parse(text) : null;
+    };
+    if(name === "audit_discover_stories") return traced("notification.discover","database-rpc",action);
+    if(name === "audit_enqueue_push" || name === "audit_enqueue_watch") return traced("notification.enqueue","database-rpc",action);
+    return action();
+  };
+  await trace.emit("run","started",runEntity);
   try {
     const { date: today, hour } = nowET();
     // quiet overnight — everything unlogged goes out on the first morning run
     if (hour >= 21 || hour < 7) {
+      outcome="skipped";phase="quiet_hours";
       return new Response(JSON.stringify({ ok: true, quiet: true }), { headers: HEADERS });
     }
 
@@ -78,8 +106,9 @@ Deno.serve(async (req: Request) => {
     }
     const notifOf = (p: string) =>
       (prefRows || []).find((r: { profile: string }) => r.profile === p)?.data?.notifications || {};
-    const server = await loadServer();
+    const server = await loadServer(sb);
     if (!server) {
+      outcome="skipped";phase="vapid_unavailable";
       return new Response(JSON.stringify({ ok: true, note: "vapid not set up" }), { headers: HEADERS });
     }
 
@@ -192,11 +221,16 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const delivery = await drainDeliveries(rpc, async (job: {sub: Parameters<InstanceType<typeof webpush.ApplicationServer>["subscribe"]>[0];payload: Record<string,unknown>}) => {
+    const delivery = await traced("notification.queue-drain","webpush",()=>drainDeliveries(rpc, async (job: {sub: Parameters<InstanceType<typeof webpush.ApplicationServer>["subscribe"]>[0];payload: Record<string,unknown>}) => {
       await server.subscribe(job.sub).pushTextMessage(JSON.stringify(job.payload), {});
-    });
+    }));
+    if(delivery.failed) {outcome="degraded";phase="delivery_retries";}
+    else if(!sentIds.length && !delivery.sent && !delivery.pruned) phase="no_deliveries";
     return new Response(JSON.stringify({ ok: true, date: today, queued: sentIds, ...delivery }), { headers: HEADERS });
   } catch (e) {
+    outcome="failed";phase="handler_failed";
     return new Response(JSON.stringify({ ok: false, error: String(e).slice(0, 300) }), { status: 500, headers: HEADERS });
+  } finally {
+    await trace.emit("run",outcome,{...runEntity,details:{...runEntity.details,duration_ms:Date.now()-startedAt,phase}});
   }
 });

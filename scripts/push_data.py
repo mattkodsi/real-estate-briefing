@@ -10,6 +10,7 @@ The pipeline writes local JSON first (same schemas as before, documented in
 CLAUDE.md), then runs this to publish. Uses the project's publishable key —
 the tables have open-write RLS by owner's choice (single-user app).
 """
+import pipeline_trace as trace
 import json
 import argparse
 from datetime import date, timedelta, datetime
@@ -86,6 +87,7 @@ def publication_paths(data, only=None, all_dates=False):
     return [], []
 
 
+@trace.traced_main('publisher')
 def main() -> None:
     parser = argparse.ArgumentParser(description="Publish explicitly scoped briefing data")
     parser.add_argument("date", nargs="?", type=publication.validate_date)

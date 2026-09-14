@@ -2,6 +2,7 @@
 
 Requires 202609110001_publication_integrity.sql. No fallback to unsafe upserts.
 """
+import pipeline_trace as trace
 from content_quality import assess_content
 from editorial_quality import prepare_editorial, validate_claims
 import copy
@@ -86,7 +87,7 @@ class Client:
         req = urllib.request.Request(SUPABASE_URL + '/rest/v1/' + path,
             data=None if data is None else json.dumps(data, allow_nan=False).encode(),
             headers={'apikey': ANON_KEY, 'Authorization': 'Bearer ' + ANON_KEY,
-                     'Content-Type': 'application/json'})
+                     'Content-Type': 'application/json', **trace.headers()})
         with urllib.request.urlopen(req, timeout=30) as response:
             return json.load(response)
 
@@ -181,19 +182,26 @@ def merge_enrichment(base, edited, current, worker, now):
     return result
 
 
+@trace.traced('publication.enrichment')
 def publish_enrichment(base, edited, worker, client=None, attempts=4):
     client = client or Client()
     validate_document('days', base)
-    for _ in range(attempts):
+    for attempt in range(attempts):
+        trace.emit('publication.attempt','started',entity_type='days',entity_key=base['date'],details={'attempt':attempt+1})
         current = client.read('days', base['date'])
         if current is None:
             raise RuntimeError('Published day disappeared; refusing to recreate it')
         merged = merge_enrichment(base, edited, current, worker, utcnow())
         if merged == current:
+            trace.emit('publication.write','skipped',entity_type='days',entity_key=base['date'],details={'reason':'no_change'})
             return current
         validate_document('days', merged)
-        if client.compare_swap('days', base['date'], current, merged):
+        with trace.phase('publication.request',entity_type='days',entity_key=base['date'],details={'method':'compare-and-swap'}):
+            saved = client.compare_swap('days', base['date'], current, merged)
+        if saved:
+            trace.emit('publication.write','completed',entity_type='days',entity_key=base['date'])
             return merged
+        trace.emit('publication.write','conflict',entity_type='days',entity_key=base['date'],details={'attempt':attempt+1})
     raise RuntimeError('Publication conflict after bounded retries; rerun against fresh data')
 
 
@@ -226,12 +234,15 @@ def validate_research_publication(table, doc, current, client):
         raise ValueError('Research reference validation failed: '+str(errors))
 
 
+@trace.traced('publication.editorial')
 def publish_document(table, key, doc, client=None):
     """Editorial publication must be newer; a racing change requires regeneration."""
     client = client or Client()
-    validate_document(table, doc)
+    with trace.phase('publication.validate',entity_type=table,entity_key=key):
+        validate_document(table, doc)
     current = client.read(table, key)
     if current is not None and {k:v for k,v in current.items() if k != 'publishedAt'} == {k:v for k,v in doc.items() if k != 'publishedAt'}:
+        trace.emit('publication.write','skipped',entity_type=table,entity_key=key,details={'reason':'no_change'})
         return
     now = utcnow()
     # stamp_editorial preserves reviewed thread corrections and rejects known
@@ -239,6 +250,7 @@ def publish_document(table, key, doc, client=None):
     # push_data currently publishes each day before its newly-created threads.
     replacement = stamp_editorial(doc, current, now) if table == "days" else copy.deepcopy(doc)
     if current is not None and {k: v for k, v in current.items() if k != "publishedAt"} == {k: v for k, v in replacement.items() if k != "publishedAt"}:
+        trace.emit('publication.write','skipped',entity_type=table,entity_key=key,details={'reason':'no_change'})
         return
     if current is not None:
         old_time = current.get('generatedAt') or current.get('publishedAt')
@@ -247,7 +259,12 @@ def publish_document(table, key, doc, client=None):
     if table in ('players','terms') and current and all(current.get(k)==replacement.get(k) for k in ('name','term','type')):
         for field in ('researchReviews','relatedResearch','researchCorrections'):
             if field in current and field not in replacement: replacement[field]=copy.deepcopy(current[field])
-    validate_research_publication(table, replacement, current, client)
+    with trace.phase('publication.references',entity_type=table,entity_key=key):
+        validate_research_publication(table, replacement, current, client)
     replacement['publishedAt'] = now
-    if not client.compare_swap(table, key, current, replacement):
+    with trace.phase('publication.request',entity_type=table,entity_key=key,details={'method':'compare-and-swap'}):
+        saved = client.compare_swap(table, key, current, replacement)
+    if not saved:
+        trace.emit('publication.write','conflict',entity_type=table,entity_key=key)
         raise RuntimeError('Concurrent publication; reload before publishing ' + table + '/' + key)
+    trace.emit('publication.write','completed',entity_type=table,entity_key=key)

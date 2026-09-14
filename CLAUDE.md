@@ -26,6 +26,10 @@ Static site (no build step): `index.html` + `css/style.css` + `js/app.js`, pipel
 
 Also include any other newsletter that is clearly real-estate news. Skip welcome/confirmation emails, job alerts, meetup blasts, and promotional one-offs.
 
+## Required publication event log
+
+For every scheduled or manual briefing routine, follow `docs/publication-trace.md` from the moment the routine starts. Begin one correlated run, record actual email search/read/parse and AI/dedupe/rank/geocode/validation stages as they happen, pass BRIEFING_RUN_ID to publisher/fillers, then record the true completed/degraded/failed outcome. Every separate retry and later update belongs in the history. Never reconstruct phase times at the end or reuse publication time as email receipt/read time. Log only hashed email IDs and safe metadata. If a phase/logger is unavailable, report the coverage gap and retain local events; do not block publication or claim full timing coverage.
+
 ## Daily update procedure (for the scheduled task)
 
 1. Search Gmail: `from:(select@inman.com OR headlines@inman.com OR mail@news.credaily.com OR mail@newyork.credaily.com OR elerts@e.therealdeal.com OR traded.co OR tradedmedia.co OR bisnow.com) after:<today>` — plus a broader pass for other real-estate newsletters received today (America/New_York).

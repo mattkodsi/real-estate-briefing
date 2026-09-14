@@ -19,3 +19,6 @@ verify_jwt = false
 
 [functions.delivery-receipt]
 verify_jwt = false
+
+[functions.pipeline-trace]
+verify_jwt = false # Dedicated x-audit-secret authentication in the handler.

@@ -15,6 +15,7 @@
 //
 // GET/POST ?date=YYYY-MM-DD (default today ET) &force=1 (skip standby check)
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createPipelineTrace } from "../_shared/pipeline-trace.mjs";
 import { assessContent } from "../_shared/content-quality.mjs";
 import { readPrimaryHeartbeat } from "../_shared/fill-heartbeat.mjs";
 import { safeFetch } from "../_shared/audit-fetch.mjs";
@@ -117,23 +118,17 @@ function extract(html: string): { ok: boolean; html: string; words: number; imag
   return { ok: !blocked && !gate && assessContent(res.html).ready, html: res.html, words: res.words, image, blocked, reason: blocked ? "bot_wall" : gate ? "subscriber_gate" : assessContent(res.html).reason };
 }
 
-async function sb(path: string, init: RequestInit = {}): Promise<Response> {
+async function databaseRequest(path: string, init: RequestInit = {}, correlation: Record<string,string> = {}): Promise<Response> {
   const response = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...init,
     headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}`,
                "Content-Type": "application/json", Prefer: "resolution=merge-duplicates",
-               ...(init.headers || {}) },
+               ...(init.headers || {}), ...correlation },
   });
   if (!response.ok) throw new Error(`Database request failed (${response.status})`);
   return response;
 }
-async function rpc(name: string, body: Record<string, unknown>): Promise<any> {
-  const response = await sb(`rpc/${name}`, {method:"POST",body:JSON.stringify(body)});
-  const text = await response.text();
-  return text ? JSON.parse(text) : null;
-}
-
-async function sessionCookie(hostname: string): Promise<string | null> {
+async function sessionCookie(hostname: string, sb: typeof databaseRequest): Promise<string | null> {
   const h = hostname.toLowerCase().replace(/^www\./, "");
   const domain = h; // Exact stored host only; never guess public suffix boundaries.
   const ids = [`session_${domain}`];
@@ -161,10 +156,27 @@ function todayET(): string {
 
 Deno.serve(async (req: Request) => {
   const denied = denyUnlessAuthorized(req); if (denied) return denied;
+  // Correlation is local to this invocation, never mutable global state.
+  const runId = crypto.randomUUID();
+  const sb = (path: string, init: RequestInit = {}) => databaseRequest(path, init, {
+    "x-briefing-run-id": runId, "x-briefing-producer": "supabase-edge",
+  });
+  const rpc = async (name: string, body: Record<string, unknown>) => {
+    const response = await sb(`rpc/${name}`, {method:"POST",body:JSON.stringify(body)});
+    const text = await response.text();return text ? JSON.parse(text) : null;
+  };
+  const trace = createPipelineTrace({sb,producer:"supabase-edge",runId});
+  const startedAt = Date.now();
+  let outcome = "completed";
+  let phase = "filled";
   const params = new URL(req.url).searchParams;
   const date = params.get("date") || todayET();
   const force = params.get("force") === "1";
 
+  const runSpan = crypto.randomUUID();
+  const entity = {entity_type:"day",entity_key:date,details:{span_id:runSpan}};
+  await trace.emit("run", "started", entity);
+  try {
   // standby: act only when the primary's pulse is stale
   if (!force) {
     try {
@@ -177,6 +189,7 @@ Deno.serve(async (req: Request) => {
       if (last) {
         const ageMin = (Date.now() - Date.parse(last)) / 60000;
         if (ageMin <= STALE_AFTER_MIN) {
+          outcome = "skipped"; phase = "primary_fresh";
           return new Response(JSON.stringify({ ok: true, standby: true, pulseAgeMin: Math.round(ageMin) }), { headers: HEADERS });
         }
       }
@@ -185,7 +198,7 @@ Deno.serve(async (req: Request) => {
 
   const dayRows = await (await sb(`days?date=eq.${date}&select=data`)).json();
   const day = dayRows?.[0]?.data;
-  if (!day) return new Response(JSON.stringify({ ok: true, note: `no day for ${date}` }), { headers: HEADERS });
+  if (!day) {outcome="skipped";phase="no_day";return new Response(JSON.stringify({ ok: true, note: `no day for ${date}` }), { headers: HEADERS });}
 
   const expected = structuredClone(day);
   const stories: Record<string, unknown>[] = day.stories || [];
@@ -194,19 +207,32 @@ Deno.serve(async (req: Request) => {
   const claims = await rpc("audit_claim_fill", {p_day:date,p_candidates:candidates,p_limit:BATCH});
   const targets = claims.map((c: {story_id:string;source_url:string}) => candidates.find(s => String(s.id) === c.story_id && s.url === c.source_url)).filter(Boolean);
   if (!targets.length) {
+    outcome="skipped";phase="no_targets";
     return new Response(JSON.stringify({ ok: true, note: "nothing to fill" }), { headers: HEADERS });
   }
 
   const filled: string[] = [], failed: string[] = [];
   for (const s of targets) {
+    const storyEntity = {entity_type:"story",entity_key:`${date}/${s.id}`,details:{span_id:crypto.randomUUID(),parent_span_id:runSpan}};
+    const extractStarted = Date.now();
+    await trace.emit("article.fetch", "started", storyEntity);
     s.fillAttemptedAt = new Date().toISOString();
     let fetchError: string | null = null;
     try {
       const u = new URL(String(s.url));
-      const res = await safeFetch(u.href, {cookie: await sessionCookie(u.hostname)});
+      const res = await safeFetch(u.href, {cookie: await sessionCookie(u.hostname, sb)});
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const html = res.html;
-      const out = extract(html);
+      const parseEntity = {...storyEntity,details:{span_id:crypto.randomUUID(),parent_span_id:storyEntity.details.span_id}};
+      await trace.emit("article.parse", "started", parseEntity);
+      let out;
+      try {
+        out = extract(html);
+        await trace.emit("article.parse", out.ok ? "completed" : "failed", {...parseEntity,details:{...parseEntity.details,words:out.words}});
+      } catch(error) {
+        await trace.emit("article.parse", "failed", parseEntity);
+        throw error;
+      }
       fetchError = out.reason;
       if (res.finalUrl && isWrapper(String(s.url)) && !isWrapper(res.finalUrl)) {
         const f = new URL(res.finalUrl);
@@ -233,13 +259,25 @@ Deno.serve(async (req: Request) => {
     s.contentStatus = quality.status;
     if (quality.ready) delete s.fillError;
     else { delete s.contentReadyAt; s.fillError = fetchError || quality.reason || "fetch_failed"; }
+    await trace.emit("article.fetch", quality.ready ? "completed" : "failed", {
+      ...storyEntity, details:{...storyEntity.details,duration_ms:Date.now()-extractStarted,phase:quality.ready ? "ready" : "not_ready"},
+    });
   }
 
   if (targets.length) {
     day.generatedAt = new Date().toISOString();
     day.publishedAt = day.generatedAt;
-    const published = await rpc("audit_publish_fill", {p_day:date,p_expected:expected,p_data:day});
-    if (!published) return new Response(JSON.stringify({ok:true,date,conflict:true,filled:[],failed}),{headers:HEADERS});
+    const publicationEntity = {...entity,details:{span_id:crypto.randomUUID(),parent_span_id:runSpan}};
+    await trace.emit("publication.write", "started", publicationEntity);
+    let published;
+    try {
+      published = await rpc("audit_publish_fill", {p_day:date,p_expected:expected,p_data:day});
+    } catch(error) {
+      await trace.emit("publication.write", "failed", publicationEntity);
+      throw error;
+    }
+    await trace.emit("publication.write", published ? "completed" : "conflict", publicationEntity);
+    if (!published) {outcome="conflict";phase="publication_conflict";return new Response(JSON.stringify({ok:true,date,conflict:true,filled:[],failed}),{headers:HEADERS});}
     // pulse ONLY on progress — a no-op standby must not mask a dead primary
     if (filled.length) await sb("secrets", { method: "POST", body: JSON.stringify({ id: "fill_heartbeat", data: {
       lastRun: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
@@ -253,4 +291,10 @@ Deno.serve(async (req: Request) => {
   }
 
   return new Response(JSON.stringify({ ok: true, date, filled, failed }), { headers: HEADERS });
+  } catch(error) {
+    outcome="failed";phase="handler_failed";
+    throw error; // Preserve the original failure and existing edge response behavior.
+  } finally {
+    await trace.emit("run",outcome,{...entity,details:{...entity.details,duration_ms:Date.now()-startedAt,phase}});
+  }
 });

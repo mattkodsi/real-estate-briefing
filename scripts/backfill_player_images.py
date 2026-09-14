@@ -28,6 +28,7 @@ Quality gate: square-ish (aspect <= 1.6) AND min side >= 48px. Monograms remain
 the honest fallback — most private real-estate people have no public headshot.
 Extend COMPANY_DOMAINS when a name doesn't map cleanly to its domain.
 """
+import pipeline_trace as trace
 import json
 import re
 import struct
@@ -252,29 +253,31 @@ def _person_headshot(slug, name):
     return None
 
 
+@trace.traced('image.upload')
 def _upload(slug, data, ct):
     name = f"{slug}.{EXT_BY_CT.get(ct, 'png')}"
     req = urllib.request.Request(
         f"{URL}/storage/v1/object/player-images/{name}", data=data, method="POST",
-        headers={**H, "Content-Type": ct or "image/png", "x-upsert": "true"})
+        headers={**H, **trace.headers(), "Content-Type": ct or "image/png", "x-upsert": "true"})
     with urllib.request.urlopen(req, timeout=30) as r:
         if r.status not in (200, 201):
             raise RuntimeError(f"upload {r.status}")
     return f"{URL}/storage/v1/object/public/player-images/{name}"
 
 
+@trace.traced('image.publish')
 def _set_image(slug, data_obj, image_url):
     data_obj["image"] = image_url
     body = json.dumps({"data": data_obj}).encode()
     req = urllib.request.Request(
         f"{URL}/rest/v1/players?slug=eq.{urllib.parse.quote(slug)}", data=body, method="PATCH",
-        headers={**H, "Content-Type": "application/json", "Prefer": "return=minimal"})
+        headers={**H, **trace.headers(), "Content-Type": "application/json", "Prefer": "return=minimal"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.status in (200, 204)
 
 
 def _roster(only=None, include_existing=False):
-    req = urllib.request.Request(f"{URL}/rest/v1/players?select=slug,data", headers=H)
+    req = urllib.request.Request(f"{URL}/rest/v1/players?select=slug,data", headers={**H, **trace.headers()})
     with urllib.request.urlopen(req, timeout=20) as r:
         rows = json.load(r)
     out = []
@@ -290,6 +293,7 @@ def _roster(only=None, include_existing=False):
     return out
 
 
+@trace.traced_main('player-images')
 def main():
     only = set(a for a in sys.argv[1:] if not a.startswith("--")) or None
     dry = "--dry-run" in sys.argv
