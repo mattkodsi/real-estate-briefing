@@ -105,4 +105,20 @@ class TraceTests(unittest.TestCase):
             writes=[e['status'] for e in events if e['stage']=='publication.write']
             self.assertEqual(writes,['conflict'])
 
+    def test_detailed_events_are_batched_by_bytes_as_well_as_count(self):
+        t=self.trace_module()
+        batches=[]
+        def transport(events):
+            self.assertLessEqual(len(json.dumps({'events':events}).encode()),131072)
+            batches.append(events)
+            return True
+        with tempfile.TemporaryDirectory() as root:
+            run=t.Run('test',directory=root,transport=transport)
+            details={k:'a'*180 for k in t.TEXT_KEYS if k not in ('receipt_at','source_hash','input_hash','artifact_hash')}
+            for _ in range(100): run.emit('trace.test','completed',details=details)
+            self.assertTrue(run.flush())
+            self.assertGreater(len(batches),1)
+            self.assertEqual(sum(map(len,batches)),100)
+            self.assertEqual(t.pending_events(run.path),[])
+
 if __name__=='__main__': unittest.main()

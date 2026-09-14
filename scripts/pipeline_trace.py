@@ -103,13 +103,23 @@ def append(path, text):
 def flush_file(path, transport=send, max_batches=10):
     try:
         pending=pending_events(path)
-        for offset in range(0,min(len(pending),max_batches*100),100):
-            batch=pending[offset:offset+100]
+        offset=0
+        for _ in range(max_batches):
+            if offset>=len(pending): break
+            batch=[];payload_bytes=14
+            for event in pending[offset:offset+100]:
+                size=len(json.dumps(event).encode())+2
+                if batch and payload_bytes+size>120000: break
+                if payload_bytes+size>120000:
+                    warn('oversized local event retained for inspection')
+                    return False
+                batch.append(event);payload_bytes+=size
             if not transport(batch):
                 warn('remote log unavailable; events retained locally for replay')
                 return False
             append(Path(path).with_suffix('.acked'),'\n'.join(e['id'] for e in batch))
-        return len(pending)<=max_batches*100
+            offset+=len(batch)
+        return offset==len(pending)
     except Exception:
         warn('log upload failed; retained local events are safe to replay')
         return False
