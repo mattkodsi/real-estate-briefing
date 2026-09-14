@@ -10,8 +10,11 @@
 - [x] Add migration and authenticated bounded ingest/report endpoint; instrument standby without changing its decisions.
 - [x] Add Python trace library/CLI; instrument routines, extraction attempts, publication validation/conflicts/noops and workflow setup outcomes.
 - [x] Document the required external routine contract and actual coverage; preserve no-window Mini compatibility.
-- [ ] Run complete regression tests, review code, canary-test additive database/endpoint changes, merge and verify deployment/worker evidence where authorized and available.
+- [x] Run complete regression tests, review code, canary-test additive database/endpoint changes, merge and verify deployment/worker evidence where authorized and available.
+- [ ] Verify real external email-read and AI-stage coverage after the remote routine adopts the hooks.
 
 Production deployment must distinguish code shipped, database installed, instrumentation observed, and external email phases verified. No synthetic receipt times or retrospective completion claims.
 
 Verification: 104 JS/PGlite +103 Python tests; GitHub run34872594227 passed for implementation77e85a5. DB installed; authenticated endpoint 200/anonymous401; real DB update observed; no-day hosted canary traced. External email/AI routine coverage remains unverified.
+
+Final follow-up: GitHub empty-date canary34873186604 produced correlated events; previous real heartbeat restored after the test. Normal Supabase dispatcher phases observed. 104 JS +104 Python tests pass; mainRegression34873192788 andPages34873186400 pass.
