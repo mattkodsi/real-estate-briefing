@@ -5,7 +5,7 @@
    History has no tab of its own — it's reached by tapping the masthead date. It still gets a hash route.
    Data lives in Supabase (public-read); the pipeline upserts via scripts/push_data.py. */
 
-const APP_VERSION = "v154";
+const APP_VERSION = "v155";
 
 const CHEVRON_SVG = '<svg class="ui-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="m6 3 5 5-5 5"/></svg>';
 function setActionText(element, text) {
@@ -407,11 +407,15 @@ async function init() {
     if (e.touches.length !== 1) { cancelReaderCarousel(true); rt = null; return; }
     if (readerCarousel?.settling) { rt = null; return; }
     const x = e.touches[0].clientX;
-    // a swipe that STARTS at the far-left edge is an exit gesture (iOS back); a
-    // swipe that starts in the content is article navigation. This spatial zoning
-    // is what keeps "leave the article" and "flip to the next article" from ever
-    // firing on the same drag.
-    rt = { x, y: e.touches[0].clientY, dx: 0, dy: 0, axis: null, edge: x <= READER_EDGE, lastX:x, lastAt:performance.now(), velocity:0 };
+    // The far-left edge belongs to iOS's OWN system back-swipe. If the app also ran
+    // its own exit animation from that zone, BOTH would slide a briefing into view on
+    // the same drag — the article's reveal AND the system's previous-page snapshot —
+    // producing a phantom second home screen wedged between the article and the real
+    // feed. So we DON'T track edge-starts at all: leaving the article is handled
+    // solely by the system gesture (or the ‹ Back button / pull-down-to-close). A
+    // swipe that starts in the content still flips to the prev/next article.
+    if (x <= READER_EDGE) { rt = null; return; }
+    rt = { x, y: e.touches[0].clientY, dx: 0, dy: 0, axis: null, edge: false, lastX:x, lastAt:performance.now(), velocity:0 };
   }, { passive: true });
   const READER_NAV = 55;                                   // px to commit to prev/next
   const READER_EXIT = 70;                                  // px of edge-drag to commit to exit
